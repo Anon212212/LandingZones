@@ -103,7 +103,7 @@ Used for:
 
 ---
 
-# 🛣 Routing (UDRs)
+#  Routing (UDRs)
 
 Each spoke subnet forwards all traffic to the NVA HA Load Balancer:
 
