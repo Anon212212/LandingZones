@@ -25,6 +25,36 @@ resource "azurerm_virtual_network" "hub" {
   resource_group_name = azurerm_resource_group.connectivity.name
 }
 
+# PROD VNet
+resource "azurerm_virtual_network" "prod" {
+  name                = "${var.org_prefix}-prod-vnet"
+  address_space       = [var.prod_address_space]
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+}
+
+# PROD app subnet (inside 10.145.2.0/24)
+resource "azurerm_subnet" "prod_app" {
+  name                 = "prod-app-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.prod.name
+  address_prefixes     = ["10.145.2.0/24"] # or /25,/26 if you want to carve it up later
+}
+
+# AVD VNet
+resource "azurerm_virtual_network" "avd" {
+  name                = "${var.org_prefix}-avd-vnet"
+  address_space       = [var.avd_address_space]
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+}
+# AVD session hosts subnet
+resource "azurerm_subnet" "avd_sessionhosts" {
+  name                 = "avd-sessionhosts-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.avd.name
+  address_prefixes     = ["10.145.3.0/24"]
+}
 # Hub subnets inside 10.145.0.0/24
 
 # NVA external subnet: 10.145.0.0/27
@@ -305,4 +335,59 @@ resource "azurerm_virtual_network_peering" "shared_to_hub" {
   remote_virtual_network_id    = azurerm_virtual_network.hub.id
   allow_forwarded_traffic      = true
   allow_virtual_network_access = true
+}
+# Hub ↔ PROD peering
+resource "azurerm_virtual_network_peering" "hub_to_prod" {
+  name                         = "hub-to-prod"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.hub.name
+  remote_virtual_network_id    = azurerm_virtual_network.prod.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+resource "azurerm_virtual_network_peering" "prod_to_hub" {
+  name                         = "prod-to-hub"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.prod.name
+  remote_virtual_network_id    = azurerm_virtual_network.hub.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+# Hub ↔ AVD peering
+resource "azurerm_virtual_network_peering" "hub_to_avd" {
+  name                         = "hub-to-avd"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.hub.name
+  remote_virtual_network_id    = azurerm_virtual_network.avd.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+resource "azurerm_virtual_network_peering" "avd_to_hub" {
+  name                         = "avd-to-hub"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.avd.name
+  remote_virtual_network_id    = azurerm_virtual_network.hub.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+resource "azurerm_route_table" "prod_rt" {
+  name                = "${var.org_prefix}-prod-rt"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+
+  route {
+    name                   = "default-to-nva"
+    address_prefix         = "0.0.0.0/0"          # or on-prem ranges
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.145.0.34"       # internal LB frontend
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "prod_app" {
+  subnet_id      = azurerm_subnet.prod_app.id   # your prod subnet
+  route_table_id = azurerm_route_table.prod_rt.id
 }

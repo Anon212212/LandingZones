@@ -17,6 +17,19 @@ variable "hub_address_space" {
 variable "spoke_address_space" {
   type    = string
   default = "10.145.1.0/24"
+
+}
+
+# New prod VNet
+variable "prod_address_space" {
+  type    = string
+  default = "10.145.2.0/24"
+}
+
+# New AVD VNet
+variable "avd_address_space" {
+  type    = string
+  default = "10.145.3.0/24"
 }
 
 variable "log_analytics_sku" {
