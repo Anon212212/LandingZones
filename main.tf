@@ -1,10 +1,3 @@
-# Assumes variables:
-# - var.org_prefix
-# - var.location
-# - var.hub_address_space   = "10.145.0.0/24"
-# - var.spoke_address_space = "10.145.1.0/24"
-# - var.log_analytics_sku
-
 data "azurerm_subscription" "current" {}
 
 resource "azurerm_resource_group" "mgmt" {
@@ -58,7 +51,7 @@ resource "azurerm_subnet" "hub_mgmt" {
   address_prefixes     = ["10.145.0.64/27"]
 }
 
-# Azure Bastion subnet: 10.145.0.96/27 (name must be AzureBastionSubnet)
+# Azure Bastion subnet: 10.145.0.96/27
 resource "azurerm_subnet" "hub_bastion" {
   name                 = "AzureBastionSubnet"
   resource_group_name  = azurerm_resource_group.connectivity.name
@@ -121,18 +114,56 @@ resource "azurerm_subnet_network_security_group_association" "hub_mgmt" {
   network_security_group_id = azurerm_network_security_group.mgmt.id
 }
 
-# Public IP for NVA external NIC
-resource "azurerm_public_ip" "nva" {
-  name                = "${var.org_prefix}-nva-pip"
+# -------------------------
+# Internal Standard Load Balancer for NVA HA (HA Ports)
+# -------------------------
+
+resource "azurerm_lb" "nva_internal" {
+  name                = "${var.org_prefix}-nva-int-lb"
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
-  allocation_method   = "Static"
   sku                 = "Standard"
+
+  frontend_ip_configuration {
+    name                          = "internal-frontend"
+    subnet_id                     = azurerm_subnet.hub_nva_internal.id
+    private_ip_address_allocation = "Static"
+    private_ip_address            = "10.145.0.34" # within 10.145.0.32/27
+  }
 }
 
-# NVA external NIC (with public IP)
+resource "azurerm_lb_backend_address_pool" "nva" {
+  name            = "nva-bepool"
+  loadbalancer_id = azurerm_lb.nva_internal.id
+}
+
+resource "azurerm_lb_probe" "nva" {
+  name            = "nva-probe"
+  loadbalancer_id = azurerm_lb.nva_internal.id
+  protocol        = "Tcp"
+  port            = 22
+}
+
+resource "azurerm_lb_rule" "nva_ha_ports" {
+  name                           = "nva-ha-ports"
+  loadbalancer_id                = azurerm_lb.nva_internal.id
+  protocol                       = "All"
+  frontend_port                  = 0
+  backend_port                   = 0
+  frontend_ip_configuration_name = "internal-frontend"
+  backend_address_pool_id        = azurerm_lb_backend_address_pool.nva.id
+  probe_id                       = azurerm_lb_probe.nva.id
+  enable_floating_ip             = true
+}
+
+# -------------------------
+# NVA NICs (2 NVAs, 2 NICs each)
+# -------------------------
+
+# External NICs (no public IP, mgmt via Bastion)
 resource "azurerm_network_interface" "nva_external" {
-  name                 = "${var.org_prefix}-nva-ext-nic"
+  count                = 2
+  name                 = "${var.org_prefix}-nva${count.index + 1}-ext-nic"
   location             = var.location
   resource_group_name  = azurerm_resource_group.connectivity.name
   enable_ip_forwarding = true
@@ -141,14 +172,14 @@ resource "azurerm_network_interface" "nva_external" {
     name                          = "external"
     subnet_id                     = azurerm_subnet.hub_nva_external.id
     private_ip_address_allocation = "Static"
-    private_ip_address            = "10.145.0.4"
-    public_ip_address_id          = azurerm_public_ip.nva.id
+    private_ip_address            = "10.145.0.${4 + count.index}" # .4, .5
   }
 }
 
-# NVA internal NIC
+# Internal NICs (behind internal LB)
 resource "azurerm_network_interface" "nva_internal" {
-  name                 = "${var.org_prefix}-nva-int-nic"
+  count                = 2
+  name                 = "${var.org_prefix}-nva${count.index + 1}-int-nic"
   location             = var.location
   resource_group_name  = azurerm_resource_group.connectivity.name
   enable_ip_forwarding = true
@@ -157,34 +188,51 @@ resource "azurerm_network_interface" "nva_internal" {
     name                          = "internal"
     subnet_id                     = azurerm_subnet.hub_nva_internal.id
     private_ip_address_allocation = "Static"
-    private_ip_address            = "10.145.0.36"
+    private_ip_address            = "10.145.0.${36 + count.index}" # .36, .37
   }
 }
 
-# Attach NSG to both NVA NICs
+# Attach NSG to both NVA NIC types
 resource "azurerm_network_interface_security_group_association" "nva_external" {
-  network_interface_id      = azurerm_network_interface.nva_external.id
+  count                    = 2
+  network_interface_id     = azurerm_network_interface.nva_external[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }
 
 resource "azurerm_network_interface_security_group_association" "nva_internal" {
-  network_interface_id      = azurerm_network_interface.nva_internal.id
+  count                    = 2
+  network_interface_id     = azurerm_network_interface.nva_internal[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }
 
-# Dual-NIC Linux NVA VM
+# Associate internal NICs with LB backend pool
+resource "azurerm_network_interface_backend_address_pool_association" "nva_internal" {
+  count                   = 2
+  network_interface_id    = azurerm_network_interface.nva_internal[count.index].id
+  ip_configuration_name   = "internal"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.nva.id
+}
+
+# -------------------------
+# Dual-NIC Linux NVAs (2 instances, zones 1 & 2)
+# -------------------------
+
 resource "azurerm_linux_virtual_machine" "nva" {
-  name                            = "${var.org_prefix}-nva"
+  count                           = 2
+  name                            = "${var.org_prefix}-nva-${count.index + 1}"
   location                        = var.location
   resource_group_name             = azurerm_resource_group.connectivity.name
   size                            = var.nva_size
   admin_username                  = var.nva_admin_username
   disable_password_authentication = true
 
-  primary_network_interface_id = azurerm_network_interface.nva_external.id
+  # Spread across zones 1 and 2
+  zone = tostring(count.index + 1)
+
+  primary_network_interface_id = azurerm_network_interface.nva_external[count.index].id
   network_interface_ids = [
-    azurerm_network_interface.nva_external.id,
-    azurerm_network_interface.nva_internal.id,
+    azurerm_network_interface.nva_external[count.index].id,
+    azurerm_network_interface.nva_internal[count.index].id,
   ]
 
   admin_ssh_key {
@@ -193,7 +241,7 @@ resource "azurerm_linux_virtual_machine" "nva" {
   }
 
   os_disk {
-    name                 = "${var.org_prefix}-nva-osdisk"
+    name                 = "${var.org_prefix}-nva-osdisk-${count.index + 1}"
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
   }
@@ -206,7 +254,9 @@ resource "azurerm_linux_virtual_machine" "nva" {
   }
 }
 
+# -------------------------
 # Azure Bastion
+# -------------------------
 
 resource "azurerm_public_ip" "bastion" {
   name                = "${var.org_prefix}-bastion-pip"
@@ -228,7 +278,9 @@ resource "azurerm_bastion_host" "bastion" {
   }
 }
 
+# -------------------------
 # Shared VNet and peering
+# -------------------------
 
 resource "azurerm_virtual_network" "shared" {
   name                = "${var.org_prefix}-shared-vnet"
@@ -253,29 +305,4 @@ resource "azurerm_virtual_network_peering" "shared_to_hub" {
   remote_virtual_network_id    = azurerm_virtual_network.hub.id
   allow_forwarded_traffic      = true
   allow_virtual_network_access = true
-}
-
-# NVA-related variables (can live in variables.tf, included here for completeness)
-
-variable "nva_admin_username" {
-  description = "Admin username for the NVA."
-  type        = string
-  default     = "nvaadmin"
-}
-
-variable "nva_admin_ssh_public_key" {
-  description = "SSH public key for the NVA admin account."
-  type        = string
-}
-
-variable "nva_mgmt_source_cidr" {
-  description = "CIDR allowed to SSH to the NVA."
-  type        = string
-  default     = "0.0.0.0/0"
-}
-
-variable "nva_size" {
-  description = "VM size for the NVA appliance."
-  type        = string
-  default     = "Standard_B2s"
 }
