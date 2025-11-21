@@ -1,3 +1,7 @@
+#############################################
+# Data & Resource Groups
+#############################################
+
 data "azurerm_subscription" "current" {}
 
 resource "azurerm_resource_group" "mgmt" {
@@ -10,6 +14,10 @@ resource "azurerm_resource_group" "connectivity" {
   location = var.location
 }
 
+#############################################
+# Log Analytics
+#############################################
+
 resource "azurerm_log_analytics_workspace" "law" {
   name                = "${var.org_prefix}-law"
   location            = var.location
@@ -18,44 +26,53 @@ resource "azurerm_log_analytics_workspace" "law" {
   retention_in_days   = 30
 }
 
+#############################################
+# VNets
+#############################################
+
+# Hub VNet (10.145.0.0/24)
 resource "azurerm_virtual_network" "hub" {
   name                = "${var.org_prefix}-hub-vnet"
-  address_space       = [var.hub_address_space]
+  address_space       = [var.hub_address_space] # expected 10.145.0.0/24
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
 }
 
-# PROD VNet
+# Shared VNet (10.145.1.0/24)
+resource "azurerm_virtual_network" "shared" {
+  name                = "${var.org_prefix}-shared-vnet"
+  address_space       = [var.spoke_address_space] # expected 10.145.1.0/24
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+}
+
+# Prod VNet (10.145.2.0/24)
 resource "azurerm_virtual_network" "prod" {
   name                = "${var.org_prefix}-prod-vnet"
-  address_space       = [var.prod_address_space]
+  address_space       = [var.prod_address_space] # expected 10.145.2.0/24
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
 }
 
-# PROD app subnet (inside 10.145.2.0/24)
-resource "azurerm_subnet" "prod_app" {
-  name                 = "prod-app-snet"
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.prod.name
-  address_prefixes     = ["10.145.2.0/24"] # or /25,/26 if you want to carve it up later
-}
-
-# AVD VNet
+# AVD VNet (10.145.3.0/24)
 resource "azurerm_virtual_network" "avd" {
   name                = "${var.org_prefix}-avd-vnet"
-  address_space       = [var.avd_address_space]
+  address_space       = [var.avd_address_space] # expected 10.145.3.0/24
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
 }
-# AVD session hosts subnet
-resource "azurerm_subnet" "avd_sessionhosts" {
-  name                 = "avd-sessionhosts-snet"
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.avd.name
-  address_prefixes     = ["10.145.3.0/24"]
+
+# Identity / DC VNet (10.145.4.0/24)
+resource "azurerm_virtual_network" "identity" {
+  name                = "${var.org_prefix}-id-vnet"
+  address_space       = [var.id_address_space] # expected 10.145.4.0/24
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
 }
-# Hub subnets inside 10.145.0.0/24
+
+#############################################
+# Hub Subnets (10.145.0.0/24)
+#############################################
 
 # NVA external subnet: 10.145.0.0/27
 resource "azurerm_subnet" "hub_nva_external" {
@@ -88,6 +105,46 @@ resource "azurerm_subnet" "hub_bastion" {
   virtual_network_name = azurerm_virtual_network.hub.name
   address_prefixes     = ["10.145.0.96/27"]
 }
+
+#############################################
+# Spoke Subnets
+#############################################
+
+# Shared app subnet: 10.145.1.0/24
+resource "azurerm_subnet" "shared_app" {
+  name                 = "shared-app-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.shared.name
+  address_prefixes     = ["10.145.1.0/24"]
+}
+
+# Prod app subnet: 10.145.2.0/24
+resource "azurerm_subnet" "prod_app" {
+  name                 = "prod-app-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.prod.name
+  address_prefixes     = ["10.145.2.0/24"]
+}
+
+# AVD session hosts subnet: 10.145.3.0/24
+resource "azurerm_subnet" "avd_sessionhosts" {
+  name                 = "avd-sessionhosts-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.avd.name
+  address_prefixes     = ["10.145.3.0/24"]
+}
+
+# Identity / DC subnet: 10.145.4.0/27
+resource "azurerm_subnet" "id_dc" {
+  name                 = "dc-snet"
+  resource_group_name  = azurerm_resource_group.connectivity.name
+  virtual_network_name = azurerm_virtual_network.identity.name
+  address_prefixes     = ["10.145.4.0/27"]
+}
+
+#############################################
+# NSGs
+#############################################
 
 # NSG for NVA NICs
 resource "azurerm_network_security_group" "nva" {
@@ -139,14 +196,53 @@ resource "azurerm_network_security_group" "mgmt" {
   }
 }
 
+# NSG for Identity / DC subnet
+resource "azurerm_network_security_group" "id_dc" {
+  name                = "${var.org_prefix}-id-dc-nsg"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+
+  # Allow core AD ports from inside Azure VNets
+  security_rule {
+    name                    = "Allow-AD-Core"
+    priority                = 100
+    direction               = "Inbound"
+    access                  = "Allow"
+    protocol                = "*"
+    source_port_range       = "*"
+    destination_port_ranges = ["53", "88", "135", "389", "445", "3268", "3269"]
+    source_address_prefix   = "VirtualNetwork"
+    destination_address_prefix = "*"
+  }
+
+  # RDP from mgmt subnet (via Bastion)
+  security_rule {
+    name                       = "Allow-RDP-From-Mgmt"
+    priority                   = 200
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3389"
+    source_address_prefix      = "10.145.0.64/27" # mgmt-snet
+    destination_address_prefix = "*"
+  }
+}
+
+# NSG associations
 resource "azurerm_subnet_network_security_group_association" "hub_mgmt" {
   subnet_id                 = azurerm_subnet.hub_mgmt.id
   network_security_group_id = azurerm_network_security_group.mgmt.id
 }
 
-# -------------------------
+resource "azurerm_subnet_network_security_group_association" "id_dc" {
+  subnet_id                 = azurerm_subnet.id_dc.id
+  network_security_group_id = azurerm_network_security_group.id_dc.id
+}
+
+#############################################
 # Internal Standard Load Balancer for NVA HA (HA Ports)
-# -------------------------
+#############################################
 
 resource "azurerm_lb" "nva_internal" {
   name                = "${var.org_prefix}-nva-int-lb"
@@ -186,9 +282,9 @@ resource "azurerm_lb_rule" "nva_ha_ports" {
   enable_floating_ip             = true
 }
 
-# -------------------------
+#############################################
 # NVA NICs (2 NVAs, 2 NICs each)
-# -------------------------
+#############################################
 
 # External NICs (no public IP, mgmt via Bastion)
 resource "azurerm_network_interface" "nva_external" {
@@ -224,28 +320,28 @@ resource "azurerm_network_interface" "nva_internal" {
 
 # Attach NSG to both NVA NIC types
 resource "azurerm_network_interface_security_group_association" "nva_external" {
-  count                    = 2
-  network_interface_id     = azurerm_network_interface.nva_external[count.index].id
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.nva_external[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }
 
 resource "azurerm_network_interface_security_group_association" "nva_internal" {
-  count                    = 2
-  network_interface_id     = azurerm_network_interface.nva_internal[count.index].id
+  count                     = 2
+  network_interface_id      = azurerm_network_interface.nva_internal[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }
 
 # Associate internal NICs with LB backend pool
 resource "azurerm_network_interface_backend_address_pool_association" "nva_internal" {
-  count                   = 2
-  network_interface_id    = azurerm_network_interface.nva_internal[count.index].id
-  ip_configuration_name   = "internal"
+  count                 = 2
+  network_interface_id  = azurerm_network_interface.nva_internal[count.index].id
+  ip_configuration_name = "internal"
   backend_address_pool_id = azurerm_lb_backend_address_pool.nva.id
 }
 
-# -------------------------
+#############################################
 # Dual-NIC Linux NVAs (2 instances, zones 1 & 2)
-# -------------------------
+#############################################
 
 resource "azurerm_linux_virtual_machine" "nva" {
   count                           = 2
@@ -284,9 +380,9 @@ resource "azurerm_linux_virtual_machine" "nva" {
   }
 }
 
-# -------------------------
+#############################################
 # Azure Bastion
-# -------------------------
+#############################################
 
 resource "azurerm_public_ip" "bastion" {
   name                = "${var.org_prefix}-bastion-pip"
@@ -308,17 +404,11 @@ resource "azurerm_bastion_host" "bastion" {
   }
 }
 
-# -------------------------
-# Shared VNet and peering
-# -------------------------
+#############################################
+# VNet Peerings (Hub ↔ Spokes)
+#############################################
 
-resource "azurerm_virtual_network" "shared" {
-  name                = "${var.org_prefix}-shared-vnet"
-  address_space       = [var.spoke_address_space]
-  location            = var.location
-  resource_group_name = azurerm_resource_group.connectivity.name
-}
-
+# Hub ↔ Shared
 resource "azurerm_virtual_network_peering" "hub_to_shared" {
   name                         = "hub-to-shared"
   resource_group_name          = azurerm_resource_group.connectivity.name
@@ -336,7 +426,8 @@ resource "azurerm_virtual_network_peering" "shared_to_hub" {
   allow_forwarded_traffic      = true
   allow_virtual_network_access = true
 }
-# Hub ↔ PROD peering
+
+# Hub ↔ Prod
 resource "azurerm_virtual_network_peering" "hub_to_prod" {
   name                         = "hub-to-prod"
   resource_group_name          = azurerm_resource_group.connectivity.name
@@ -355,7 +446,7 @@ resource "azurerm_virtual_network_peering" "prod_to_hub" {
   allow_virtual_network_access = true
 }
 
-# Hub ↔ AVD peering
+# Hub ↔ AVD
 resource "azurerm_virtual_network_peering" "hub_to_avd" {
   name                         = "hub-to-avd"
   resource_group_name          = azurerm_resource_group.connectivity.name
@@ -374,6 +465,49 @@ resource "azurerm_virtual_network_peering" "avd_to_hub" {
   allow_virtual_network_access = true
 }
 
+# Hub ↔ Identity
+resource "azurerm_virtual_network_peering" "hub_to_identity" {
+  name                         = "hub-to-identity"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.hub.name
+  remote_virtual_network_id    = azurerm_virtual_network.identity.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+resource "azurerm_virtual_network_peering" "identity_to_hub" {
+  name                         = "identity-to-hub"
+  resource_group_name          = azurerm_resource_group.connectivity.name
+  virtual_network_name         = azurerm_virtual_network.identity.name
+  remote_virtual_network_id    = azurerm_virtual_network.hub.id
+  allow_forwarded_traffic      = true
+  allow_virtual_network_access = true
+}
+
+#############################################
+# Route Tables & Associations (Spokes → NVA ILB)
+#############################################
+
+# Shared
+resource "azurerm_route_table" "shared_rt" {
+  name                = "${var.org_prefix}-shared-rt"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+
+  route {
+    name                   = "default-to-nva"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.145.0.34"
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "shared_app" {
+  subnet_id      = azurerm_subnet.shared_app.id
+  route_table_id = azurerm_route_table.shared_rt.id
+}
+
+# Prod
 resource "azurerm_route_table" "prod_rt" {
   name                = "${var.org_prefix}-prod-rt"
   location            = var.location
@@ -381,19 +515,18 @@ resource "azurerm_route_table" "prod_rt" {
 
   route {
     name                   = "default-to-nva"
-    address_prefix         = "0.0.0.0/0"          # or on-prem ranges
+    address_prefix         = "0.0.0.0/0"
     next_hop_type          = "VirtualAppliance"
-    next_hop_in_ip_address = "10.145.0.34"       # internal LB frontend
+    next_hop_in_ip_address = "10.145.0.34"
   }
 }
 
 resource "azurerm_subnet_route_table_association" "prod_app" {
-  subnet_id      = azurerm_subnet.prod_app.id   # your prod subnet
+  subnet_id      = azurerm_subnet.prod_app.id
   route_table_id = azurerm_route_table.prod_rt.id
 }
 
-
-
+# AVD
 resource "azurerm_route_table" "avd_rt" {
   name                = "${var.org_prefix}-avd-rt"
   location            = var.location
@@ -403,11 +536,30 @@ resource "azurerm_route_table" "avd_rt" {
     name                   = "default-to-nva"
     address_prefix         = "0.0.0.0/0"
     next_hop_type          = "VirtualAppliance"
-    next_hop_in_ip_address = "10.145.0.34" # internal LB frontend
+    next_hop_in_ip_address = "10.145.0.34"
   }
 }
 
 resource "azurerm_subnet_route_table_association" "avd_sessionhosts" {
   subnet_id      = azurerm_subnet.avd_sessionhosts.id
   route_table_id = azurerm_route_table.avd_rt.id
+}
+
+# Identity / DC
+resource "azurerm_route_table" "id_rt" {
+  name                = "${var.org_prefix}-id-rt"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+
+  route {
+    name                   = "default-to-nva"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.145.0.34"
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "id_dc" {
+  subnet_id      = azurerm_subnet.id_dc.id
+  route_table_id = azurerm_route_table.id_rt.id
 }

@@ -32,6 +32,11 @@ variable "avd_address_space" {
   default = "10.145.3.0/24"
 }
 
+variable "id_address_space" {
+  type    = string
+  default = "10.145.4.0/24"
+}
+
 variable "log_analytics_sku" {
   type    = string
   default = "PerGB2018"
