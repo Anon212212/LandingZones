@@ -391,3 +391,23 @@ resource "azurerm_subnet_route_table_association" "prod_app" {
   subnet_id      = azurerm_subnet.prod_app.id   # your prod subnet
   route_table_id = azurerm_route_table.prod_rt.id
 }
+
+
+
+resource "azurerm_route_table" "avd_rt" {
+  name                = "${var.org_prefix}-avd-rt"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.connectivity.name
+
+  route {
+    name                   = "default-to-nva"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.145.0.34" # internal LB frontend
+  }
+}
+
+resource "azurerm_subnet_route_table_association" "avd_sessionhosts" {
+  subnet_id      = azurerm_subnet.avd_sessionhosts.id
+  route_table_id = azurerm_route_table.avd_rt.id
+}
