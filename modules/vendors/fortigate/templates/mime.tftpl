@@ -1,0 +1,22 @@
+Content-Type: multipart/mixed; boundary="==FGTBOOT=="
+MIME-Version: 1.0
+
+--==FGTBOOT==
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="config"
+
+${config}
+
+%{ if license != "" ~}
+--==FGTBOOT==
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="license"
+
+${license}
+
+%{ endif ~}
+--==FGTBOOT==--

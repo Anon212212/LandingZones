@@ -58,6 +58,10 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 
 ---
 
+## Third-party firewall NVAs (multi-client)
+
+`modules/nva-firewall` deploys **FortiGate, SonicWall NSv, Palo Alto VM-Series or pfSense Plus** into a client subscription as `single`, `active-standby` (Azure API failover with a managed identity) or `active-active` (internal + external Standard LBs). It's built from two layers: `modules/network-ha-pattern` (Azure plumbing) and `modules/vendors/<vendor>`. There are worked client examples in `environments/client-*`. See [modules/nva-firewall/README.md](modules/nva-firewall/README.md).
+
 ## Landing Zone Designer (GUI)
 
 Prefer not to edit variables by hand? `gui/` contains a Python front end. It lets you:
@@ -191,6 +195,7 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `cost.tf` | Budget |
 | `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
 | `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
+| `modules/nva-firewall/`, `modules/network-ha-pattern/`, `modules/vendors/` | Multi-client third-party firewall NVA framework (FortiGate, SonicWall, Palo Alto, pfSense) |
 | `modules/spoke/` | One workload spoke in its landing-zone subscription: RG, VNet, NSG, route table, peering, flow logs, diagnostics |
 | `scripts/bootstrap.sh` | One-off: state storage + OIDC plan/apply identities for the pipeline |
 | `environments/` | Committed per-environment tfvars used by the deploy workflow |
