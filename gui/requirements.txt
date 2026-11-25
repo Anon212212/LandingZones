@@ -1,0 +1,3 @@
+nicegui==3.17.1
+# Optional: desktop window with `python gui/app.py --native`
+# pywebview>=5.0

@@ -31,6 +31,15 @@ jobs:
       - name: terraform test (mocked provider – WAF guardrails)
         run: terraform test
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: designer tests (core + generated tfvars planned by terraform)
+        run: |
+          pip install -r gui/requirements-dev.txt
+          python -m pytest gui/tests -q
+
       - uses: terraform-linters/setup-tflint@v4
 
       - name: tflint

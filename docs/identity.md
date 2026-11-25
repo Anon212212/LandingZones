@@ -4,6 +4,8 @@ Domain controllers are **tier-0**: anyone who controls them controls the whole f
 
 ## Layout
 
+Full diagram: [architecture.drawio.svg](architecture.drawio.svg), editable in draw.io. Identity detail:
+
 ```
  Identity subscription (tier-0)                       Connectivity subscription
  ┌───────────────────────────────────────────────┐    ┌─────────────────────────┐

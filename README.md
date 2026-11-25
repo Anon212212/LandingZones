@@ -15,27 +15,9 @@ Two subscriptions:
 
 ## Architecture
 
-```
-                         Internet
-                            ▲
-                    NAT Gateway (egress)
-                            │
- ┌──────────── vnet-<org>-hub-<env>-<region>  10.145.0.0/24 ────────────┐
- │ snet-nva-external .0/27     [NVA-1 .4 z1]   [NVA-2 .5 z2]            │
- │                                 │ eth0           │ eth0               │
- │                                 │ eth1           │ eth1               │
- │ snet-nva-internal .32/27    [NVA-1 .37]     [NVA-2 .38]              │
- │                        ILB frontend .36 (HA Ports, zone-redundant)   │
- │ snet-mgmt .64/27            AzureBastionSubnet .96/27 (zone-redundant)│
- └──────────────┬───────────┬───────────┬───────────┬───────────────────┘
-           peering     peering     peering     peering ─────── global peering
-                │           │           │           │                   │
-            shared        prod         avd     identity (neu)  ◄──► identity (weu)
-         10.145.1/24  10.145.2/24  10.145.3/24  10.145.4/24        10.146.4/24
-                                               DC z1 + DC z2       DC z1 + DC z2
-                                               RSV (ZRS)           RSV (ZRS)
-                                             └──────── identity subscription ────────┘
-```
+[![Architecture diagram: hub & spoke with HA NVAs in the connectivity subscription and region- and zone-redundant domain controllers in the tier-0 identity subscription](docs/architecture.drawio.svg)](docs/architecture.drawio.svg)
+
+> **Editing the diagram:** `docs/architecture.drawio.svg` is an SVG with the draw.io model embedded. Open it in [diagrams.net](https://app.diagrams.net) (*File → Open from → Device*) or in VS Code with the *Draw.io Integration* extension, edit, and save it in place. GitHub keeps rendering the updated SVG, so there's no separate export step.
 
 Every spoke subnet has a UDR sending `0.0.0.0/0` to the ILB frontend, so spoke↔spoke and spoke→Internet traffic always goes through the NVAs. All workload subnets are private (no default outbound access).
 
@@ -69,6 +51,22 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 | Governance | Mandatory tags, delete locks, monthly budget |
 
 ---
+
+## Landing Zone Designer (GUI)
+
+Prefer not to edit variables by hand? `gui/` contains a Python front end. Choose options from dropdowns and presets, watch the architecture diagram update live, switch on **NIS2** / **DORA** to enforce their baseline on top of WAF, and export `terraform.tfvars`, an editable draw.io diagram and a compliance report.
+
+```bash
+pip install -r gui/requirements.txt
+```
+
+```bash
+python gui/app.py
+```
+
+[![Landing Zone Designer](docs/images/designer-overview.png)](gui/README.md#screenshots)
+
+See [gui/README.md](gui/README.md) for a screen-by-screen walkthrough.
 
 ## Usage
 
@@ -158,3 +156,4 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `tests/` | `terraform test` guardrails |
 | `docs/well-architected.md` | WAF pillar mapping, trade-offs, gaps |
 | `docs/identity.md` | Tier-0 identity design, backup, promotion and restore runbook |
+| `gui/` | Landing Zone Designer: GUI, compliance rules engine (WAF/NIS2/DORA), live diagram, tfvars generator |
