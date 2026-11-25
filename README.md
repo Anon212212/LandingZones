@@ -1,109 +1,160 @@
 # LandingZones
 
-# Hub & Spoke Networking Deployment with HA NVA – Terraform
+Terraform for an Azure **hub & spoke** network with a **highly available NVA pair** behind an internal Standard Load Balancer (HA Ports), aligned to the **Azure Well-Architected Framework** and Cloud Adoption Framework naming.
 
-This Terraform configuration deploys an Azure **Hub & Spoke network topology** with a **high-availability (HA) Network Virtual Appliance (NVA)** pair behind an **Internal Load Balancer**, along with multiple spokes, management infrastructure, Azure Bastion, and routing.
+➡️ **[Well-Architected alignment, pillar by pillar](docs/well-architected.md)** · **[Identity (tier-0) design & runbook](docs/identity.md)**
 
-This design is suitable for:
+Two subscriptions:
 
-- Enterprise landing zones  
-- Azure Virtual Desktop (AVD)  
-- Segmented shared/prod workloads  
-- Appliance-based routing requirements  
-- Lab or production environments needing HA network security appliances  
-
----
-
-#  Architecture Overview
-
-##  Hub VNet – `10.145.0.0/24`
-
-| Subnet Name           | CIDR             | Role          | Color        |
-|-----------------------|------------------|---------------|--------------|
-| `nva-external-snet`   | `10.145.0.0/27`  | NVA External  | 🟥 Critical   |
-| `nva-internal-snet`   | `10.145.0.32/27` | NVA Internal  | 🟥 Critical   |
-| `mgmt-snet`           | `10.145.0.64/27` | Management    | 🟦 Management |
-| `AzureBastionSubnet`  | `10.145.0.96/27` | Bastion       | 🟩 Access     |
+| Subscription | Contents |
+|---|---|
+| Connectivity | Hub, workload spokes (shared, prod, avd), HA NVAs, Bastion, NAT Gateway, platform monitoring |
+| Identity (tier-0) | Domain controllers in two regions × two zones, a Recovery Services vault per region, tier-0 Key Vault and Log Analytics |
 
 ---
 
-##  Shared VNet – `10.145.1.0/24`
+## Architecture
 
-| Subnet Name        | CIDR             | Purpose          | Color     |
-|--------------------|------------------|-------------------|-----------|
-| `shared-app-snet`  | `10.145.1.0/24`  | Shared workloads  | 🟨 Shared |
+```
+                         Internet
+                            ▲
+                    NAT Gateway (egress)
+                            │
+ ┌──────────── vnet-<org>-hub-<env>-<region>  10.145.0.0/24 ────────────┐
+ │ snet-nva-external .0/27     [NVA-1 .4 z1]   [NVA-2 .5 z2]            │
+ │                                 │ eth0           │ eth0               │
+ │                                 │ eth1           │ eth1               │
+ │ snet-nva-internal .32/27    [NVA-1 .37]     [NVA-2 .38]              │
+ │                        ILB frontend .36 (HA Ports, zone-redundant)   │
+ │ snet-mgmt .64/27            AzureBastionSubnet .96/27 (zone-redundant)│
+ └──────────────┬───────────┬───────────┬───────────┬───────────────────┘
+           peering     peering     peering     peering ─────── global peering
+                │           │           │           │                   │
+            shared        prod         avd     identity (neu)  ◄──► identity (weu)
+         10.145.1/24  10.145.2/24  10.145.3/24  10.145.4/24        10.146.4/24
+                                               DC z1 + DC z2       DC z1 + DC z2
+                                               RSV (ZRS)           RSV (ZRS)
+                                             └──────── identity subscription ────────┘
+```
 
----
+Every spoke subnet has a UDR sending `0.0.0.0/0` to the ILB frontend, so spoke↔spoke and spoke→Internet traffic always goes through the NVAs. All workload subnets are private (no default outbound access).
 
-##  Prod VNet – `10.145.2.0/24`
+### Address plan (defaults)
 
-| Subnet Name      | CIDR             | Purpose           | Color   |
-|------------------|------------------|--------------------|---------|
-| `prod-app-snet`  | `10.145.2.0/24`  | Production apps    | 🟧 Prod |
+Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_space`, so changing the variable re-addresses everything consistently. Azure reserves the first four IPs of each subnet, which is why the ILB uses `.36`.
 
----
+| VNet | CIDR | Subnet | CIDR | NSG |
+|---|---|---|---|---|
+| hub | `10.145.0.0/24` | `snet-nva-external` | `.0/27` | nva |
+| | | `snet-nva-internal` | `.32/27` | nva |
+| | | `snet-mgmt` | `.64/27` | mgmt |
+| | | `AzureBastionSubnet` | `.96/27` | bastion (Microsoft rule set) |
+| shared | `10.145.1.0/24` | `snet-shared-app` | `/24` | spoke baseline |
+| prod | `10.145.2.0/24` | `snet-prod-app` | `/24` | spoke baseline |
+| avd | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
+| identity (primary, identity sub) | `10.145.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
+| identity (secondary, identity sub) | `10.146.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 
-##  AVD VNet – `10.145.3.0/24`
+### What's deployed
 
-| Subnet Name              | CIDR             | Purpose              | Color |
-|--------------------------|------------------|-----------------------|-------|
-| `avd-sessionhosts-snet`  | `10.145.3.0/24`  | AVD Session Hosts     | 🟪 AVD |
-
----
-
-#  High Availability NVA Pair
-
-Two Linux-based NVAs are deployed for high availability:
-
-- **nva-1 → Zone 1**  
-- **nva-2 → Zone 2**
-
-### NVA NIC Layout
-
-| NIC Type     | NVA1 IP        | NVA2 IP        | Subnet              |
-|--------------|----------------|----------------|----------------------|
-| External NIC | `10.145.0.4`   | `10.145.0.5`   | `nva-external-snet`  |
-| Internal NIC | `10.145.0.36`  | `10.145.0.37`  | `nva-internal-snet`  |
-
----
-
-#  Internal Load Balancer (ILB)
-
-- **LB Frontend IP:** `10.145.0.34`  
-- Located in: `nva-internal-snet`  
-- Uses **HA Ports** to forward *all* traffic  
-- Backend pool contains both NVAs’ internal NICs  
-- Health probe: **TCP 22**
-
-### Purpose of ILB
-
-Provides active-active flow distribution for:
-
-- East–west traffic  
-- Spoke-to-spoke routing  
-- Spoke-to-Internet routing (if NVAs perform NAT)  
-- On-prem routing (if VPN/ER gateway exists)  
+| Area | Resources |
+|---|---|
+| Connectivity | Hub + 4 spokes, peerings, route tables, NAT Gateway |
+| NVA | 2+ Ubuntu 24.04 VMs (one per zone, Trusted Launch, accelerated networking, platform patching), HA Ports ILB, cloud-init router/SNAT config |
+| Access | Azure Bastion (zone-redundant) |
+| Security | NSGs on every subnet + NVA NICs, optional DDoS plan, optional encryption at host |
+| Monitoring | Log Analytics, diagnostics on all network resources, VNet flow logs + Traffic Analytics, Azure Monitor Agent + DCR on NVAs |
+| Alerting | ILB health/data path, NVA availability and CPU, NAT SNAT failures, Service Health, Resource Health |
+| Identity (tier-0) | Dedicated subscription. Per region: VNet, one Windows Server 2025 DC per zone (static IP, NTDS disk with caching off, Trusted Launch), a ZRS immutable Recovery Services vault with an Enhanced daily policy. Shared: tier-0 Key Vault (generated admin passwords), tier-0 Log Analytics, DCR, identity mesh peering |
+| Governance | Mandatory tags, delete locks, monthly budget |
 
 ---
 
-# Azure Bastion
+## Usage
 
-Azure Bastion is deployed in:
+Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and two subscriptions in the same tenant (connectivity and identity). The deploying identity needs Owner (or Contributor + User Access Administrator) on both, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
 
-- **Subnet:** `AzureBastionSubnet`  
-- **Public IP:** Standard SKU  
+```bash
+cp terraform.tfvars.example terraform.tfvars   # set org_prefix, owner, cost_center, SSH key, identity_subscription_id
+```
 
-Provides secure SSH/RDP access without any VM public IP exposure.
+```bash
+export ARM_SUBSCRIPTION_ID=<subscription-id>
+```
 
-Used for:
+```bash
+terraform init
+```
 
-- NVA management  
-- Management subnet access  
-- Workload VM access  
+```bash
+terraform plan -out tfplan
+```
 
----
+```bash
+terraform apply tfplan
+```
 
-#  Routing (UDRs)
+Uncomment the `backend "azurerm"` block in `providers.tf` to keep state remotely. To tear down, set `enable_resource_locks = false` and apply before running `terraform destroy`.
 
-Each spoke subnet forwards all traffic to the NVA HA Load Balancer:
+After the first apply, promote the domain controllers and cut DNS over by following **[docs/identity.md](docs/identity.md)**.
 
+### Testing
+
+`terraform test` plans against a mocked provider (no credentials needed) and asserts the WAF and tier-0 guardrails: addressing, zones, NSG coverage, private subnets, Trusted Launch, flow logs, diagnostics, tags, budget, naming, identity region/zone redundancy, separate subscription, NTDS disk caching, backup policy and tombstone-safe retention. CI (`.github/workflows/terraform.yml`) runs `fmt`, `validate`, `test`, `tflint` and `checkov` on every PR.
+
+```bash
+terraform test
+```
+
+### Key variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `org_prefix` | — | **Required.** 2–15 lowercase chars. |
+| `owner`, `cost_center` | — | **Required.** Mandatory tags. |
+| `nva_admin_ssh_public_key` | — | **Required.** |
+| `subscription_id` | `null` | Connectivity subscription. Falls back to `ARM_SUBSCRIPTION_ID`. |
+| `identity_subscription_id` | — | **Required.** Dedicated tier-0 subscription. |
+| `identity_regions` | neu `10.145.4.0/24` + weu `10.146.4.0/24`, zones 1–2 | ≥ 2 regions, ≥ 2 zones each. |
+| `dc_size` / `dc_image_sku` | `Standard_D2s_v5` / `2025-datacenter-azure-edition` | |
+| `identity_backup_storage_mode` | `ZoneRedundant` | `GeoRedundant` adds Cross Region Restore. |
+| `identity_dns_servers` | `[]` | Set to `identity_dc_ips` after promotion. |
+| `identity_allow_hub_bastion` / `identity_admin_source_cidrs` | `true` / `[]` | Who may RDP to DCs. |
+| `identity_key_vault_allowed_ips` | `[]` | Restrict the tier-0 Key Vault firewall. |
+| `environment` | `prod` | Used in names and tags. |
+| `location` | `northeurope` | Must support Availability Zones. |
+| `zones` | `["1","2","3"]` | Zone-redundant ILB, Bastion, public IPs. |
+| `nva_zones` | `["1","2"]` | One NVA per zone; add zones to scale out. |
+| `nva_size` | `Standard_D2s_v5` | |
+| `alert_email_addresses` | `[]` | Action group + budget recipients. |
+| `monthly_budget_amount` | `0` | 0 disables the budget. |
+| `enable_flow_logs` | `true` | Needs the region's Network Watcher. |
+| `enable_nat_gateway` | `true` | |
+| `enable_resource_locks` | `true` | |
+| `bastion_sku` | `Standard` | `Basic` to save cost. |
+| `ddos_protection_plan_id` | `null` | Attach an existing DDoS plan. |
+| `nva_encryption_at_host` | `false` | Requires a subscription feature. |
+| `log_retention_days` / `log_daily_quota_gb` | `90` / `-1` | |
+
+See `variables.tf` for the full list, all with validation and descriptions.
+
+## File layout
+
+| File | Contents |
+|---|---|
+| `providers.tf` | Terraform/provider versions, provider features, optional backend |
+| `variables.tf` | Inputs with validation, grouped by WAF pillar |
+| `locals.tf` | CAF naming, tags, derived addressing, spoke map |
+| `main.tf` | Resource groups, Log Analytics, delete locks |
+| `network.tf` | VNets, subnets, peerings, route tables, NAT Gateway |
+| `security.tf` | NSGs and associations |
+| `nva.tf` | ILB, NVA NICs/VMs, Azure Monitor Agent |
+| `bastion.tf` | Azure Bastion |
+| `monitoring.tf` | Diagnostics, flow logs, DCR, action group, alerts |
+| `cost.tf` | Budget |
+| `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
+| `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
+| `outputs.tf` | Outputs |
+| `tests/` | `terraform test` guardrails |
+| `docs/well-architected.md` | WAF pillar mapping, trade-offs, gaps |
+| `docs/identity.md` | Tier-0 identity design, backup, promotion and restore runbook |

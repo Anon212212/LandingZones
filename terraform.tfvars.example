@@ -1,0 +1,42 @@
+# --- Required -------------------------------------------------------------
+org_prefix               = "contoso"
+owner                    = "platform-team@contoso.com"
+cost_center              = "CC-1234"
+nva_admin_ssh_public_key = "ssh-ed25519 AAAA... you@example"
+identity_subscription_id = "11111111-1111-1111-1111-111111111111" # dedicated tier-0 subscription
+
+# --- Common ---------------------------------------------------------------
+# subscription_id       = "00000000-0000-0000-0000-000000000000" # or ARM_SUBSCRIPTION_ID
+# environment           = "prod"
+# location              = "northeurope"
+# alert_email_addresses = ["platform-oncall@contoso.com"]
+# monthly_budget_amount = 1500
+
+# --- Identity (tier-0) -----------------------------------------------------
+# identity_regions = {
+#   primary   = { location = "northeurope", address_space = "10.145.4.0/24", dc_zones = ["1", "2"] }
+#   secondary = { location = "westeurope",  address_space = "10.146.4.0/24", dc_zones = ["1", "2"] }
+# }
+# identity_backup_storage_mode   = "ZoneRedundant"
+# identity_dns_servers           = ["10.145.4.4", "10.145.4.5", "10.146.4.4", "10.146.4.5"] # after promotion
+# identity_allow_hub_bastion     = true
+# identity_admin_source_cidrs    = []  # PAW subnet
+# identity_key_vault_allowed_ips = []  # deployment agent IP
+# dc_hybrid_benefit              = false
+
+# --- Reliability ----------------------------------------------------------
+# nva_zones             = ["1", "2", "3"]  # scale out to three NVAs
+# enable_resource_locks = true
+
+# --- Security -------------------------------------------------------------
+# nva_encryption_at_host  = true   # register Microsoft.Compute/EncryptionAtHost first
+# ddos_protection_plan_id = "/subscriptions/.../ddosProtectionPlans/ddos-plan"
+# nva_mgmt_source_cidrs   = []
+
+# --- Cost / performance trade-offs ----------------------------------------
+# bastion_sku        = "Basic"           # cheaper; loses native client + IP connect
+# nva_size           = "Standard_D4s_v5" # more throughput per NVA
+# log_retention_days = 30
+# log_daily_quota_gb = 5
+
+# tags = { business-unit = "it" }

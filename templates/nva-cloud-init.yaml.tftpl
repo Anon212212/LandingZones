@@ -1,0 +1,46 @@
+#cloud-config
+# Baseline router config for the Linux NVAs.
+#   eth0 = external NIC (default route, Internet via NAT Gateway)
+#   eth1 = internal NIC (behind the ILB, faces the spokes)
+
+write_files:
+  - path: /etc/sysctl.d/90-nva.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      # Loose reverse-path filtering: traffic legitimately arrives on eth1
+      # for destinations reached via eth0 and vice versa.
+      net.ipv4.conf.all.rp_filter = 2
+      net.ipv4.conf.default.rp_filter = 2
+
+  - path: /usr/local/sbin/nva-routes.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      # Return path to the spokes goes out the internal NIC.
+%{ for p in spoke_prefixes ~}
+      ip route replace ${p} via ${internal_gateway} dev eth1
+%{ endfor ~}
+      # SNAT only traffic leaving towards the Internet; east-west is routed as-is.
+      iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null \
+        || iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+  - path: /etc/systemd/system/nva-routes.service
+    content: |
+      [Unit]
+      Description=NVA spoke routes and SNAT
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/nva-routes.sh
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - sysctl --system
+  - systemctl daemon-reload
+  - systemctl enable --now nva-routes.service
