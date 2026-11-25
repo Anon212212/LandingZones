@@ -18,6 +18,193 @@ Each spoke's `subscription` (`connectivity`, `shared`, `prod` or `avd`) decides 
 
 ---
 
+## Getting started
+
+From an empty tenant to a running landing zone. Do the steps in order; each one links to the detail further down.
+
+| # | Step | Who | Time |
+|---|---|---|---|
+| 1 | [Prerequisites](#1-prerequisites) | Platform engineer | 15 min |
+| 2 | [Provision the five subscriptions](#2-provision-the-subscriptions) | Billing / tenant admin | 30 min |
+| 3 | [Organise them in management groups](#3-organise-the-subscriptions-in-management-groups) | Tenant admin | 10 min |
+| 4 | [Register resource providers](#4-register-resource-providers-and-features) | Subscription owner | 10 min |
+| 5 | [Design and check in the Landing Zone Designer](#5-design-and-pre-flight-in-the-designer) | Platform engineer | 30 min |
+| 6 | [Bootstrap Terraform state and the pipeline identities](#6-bootstrap-state-and-the-pipeline) | Subscription owner | 10 min |
+| 7 | [Configure GitHub](#7-configure-github) | Repo admin | 10 min |
+| 8 | [First deployment](#8-first-deployment) | Platform engineer + approver | 45 min |
+| 9 | [Post-deployment](#9-post-deployment) | Platform + identity team | ½ day |
+
+### 1. Prerequisites
+
+- **Tools:**
+  - Terraform ≥ 1.9.
+  - Azure CLI ≥ 2.60. Run `az extension add --name account` for subscription creation.
+  - Python 3.11+ (for the designer).
+  - Git, and a GitHub repository holding this code.
+- **Entra ID roles** for whoever runs the setup:
+  - **Application Administrator**, or permission to create app registrations (pipeline identities).
+  - **Owner** on the subscriptions once they exist.
+  - The **billing role** that lets you create subscriptions:
+    - EA: *Enrollment account owner*.
+    - MCA: *Owner* or *Azure subscription creator* on an invoice section.
+- **Decisions to make first:**
+  - Primary and secondary regions (both must support Availability Zones).
+  - An address range that doesn't overlap on-premises or existing VNets (default `10.145.0.0/16` + `10.146.0.0/16`).
+  - The org prefix and environment name.
+  - The on-call email for alerts.
+  - A monthly budget in EUR.
+
+### 2. Provision the subscriptions
+
+Create **five** subscriptions in the same tenant:
+
+| Subscription | Suggested name | Terraform variable |
+|---|---|---|
+| Connectivity | `sub-<org>-connectivity-prod` | `subscription_id` |
+| Identity (tier-0) | `sub-<org>-identity-prod` | `identity_subscription_id` |
+| Shared services | `sub-<org>-shared-services-prod` | `shared_services_subscription_id` |
+| Production | `sub-<org>-production-prod` | `production_subscription_id` |
+| Azure Virtual Desktop | `sub-<org>-avd-prod` | `avd_subscription_id` |
+
+You can create them in the portal (*Subscriptions → Add*) or from the CLI with a **subscription alias**. Look up your billing scope first:
+
+```bash
+az billing account list --query "[].{name:name, displayName:displayName, agreementType:agreementType}" -o table
+```
+
+- **EA:** the scope is `/providers/Microsoft.Billing/billingAccounts/<billingAccount>/enrollmentAccounts/<enrollmentAccount>`.
+- **MCA:** the scope is `/providers/Microsoft.Billing/billingAccounts/<billingAccount>/billingProfiles/<billingProfile>/invoiceSections/<invoiceSection>`.
+
+Then create each subscription (repeat with each name from the table):
+
+```bash
+az account alias create --name sub-contoso-connectivity-prod --display-name sub-contoso-connectivity-prod --billing-scope "<billing-scope>" --workload Production
+```
+
+Collect the five subscription IDs. You'll pick them from a dropdown in the designer, or paste them into `environments/production.tfvars`:
+
+```bash
+az account list --query "[?starts_with(name, 'sub-contoso')].{name:name, id:id}" -o table
+```
+
+> Pay-as-you-go or CSP tenants can't create subscriptions from the CLI. Create them in the portal or partner centre, then continue.
+
+### 3. Organise the subscriptions in management groups
+
+Use the Azure landing zone hierarchy, so policy, RBAC and cost reporting follow the tiering:
+
+```
+Tenant Root Group
+└── mg-<org>
+    ├── mg-<org>-platform
+    │   ├── mg-<org>-connectivity   ← connectivity subscription
+    │   └── mg-<org>-identity       ← identity subscription (tier-0: tightest RBAC)
+    └── mg-<org>-landingzones
+        ├── mg-<org>-corp           ← shared services, production
+        └── mg-<org>-avd            ← AVD
+```
+
+Create each management group, from the top down:
+
+```bash
+az account management-group create --name mg-contoso-platform --display-name "Platform" --parent mg-contoso
+```
+
+Then move each subscription into its group:
+
+```bash
+az account management-group subscription add --name mg-contoso-identity --subscription <identity-subscription-id>
+```
+
+Only tier-0 admins should get RBAC on `mg-<org>-identity`. Use PIM for eligible, time-bound access where you have Entra ID P2.
+
+### 4. Register resource providers and features
+
+Register these resource providers in **every** subscription. It's idempotent and quick.
+
+```bash
+for sub in <connectivity-id> <identity-id> <shared-id> <prod-id> <avd-id>; do for ns in Microsoft.Network Microsoft.Compute Microsoft.Storage Microsoft.KeyVault Microsoft.RecoveryServices Microsoft.OperationalInsights Microsoft.Insights Microsoft.ManagedIdentity Microsoft.Authorization Microsoft.MarketplaceOrdering; do az provider register --subscription "$sub" --namespace "$ns"; done; done
+```
+
+Optional, only if you'll turn on *encryption at host*. Register it on the connectivity and identity subscriptions:
+
+```bash
+az feature register --subscription <subscription-id> --namespace Microsoft.Compute --name EncryptionAtHost
+```
+
+Also check that each subscription has enough **vCPU quota** for the default design: 2 × D2s_v5 NVAs plus 2 × D2s_v5 DCs per region. The designer's pre-flight checks this in the next step.
+
+### 5. Design and pre-flight in the designer
+
+```bash
+pip install -r gui/requirements.txt
+```
+
+```bash
+python gui/app.py
+```
+
+1. **Sign in to Azure** (top right) with your `az login` session.
+2. On **Basics**, pick the five subscriptions from the dropdowns, and set the org prefix, owner and cost centre.
+3. Adjust the network, resilience, identity regions and spokes. Switch on **NIS2 / DORA** if they apply to you.
+4. Press **Run checks** (pre-flight). Fix every red item: overlapping VNets, quota, missing permissions, zones.
+5. Check the **estimated monthly cost** (EUR).
+
+See [gui/README.md](gui/README.md) for a screen-by-screen walkthrough.
+
+### 6. Bootstrap state and the pipeline
+
+On the designer's **Export** tab, enter the GitHub repository and environment name, then copy the generated `scripts/bootstrap.sh` command. Run it once as a subscription owner, with `--dry-run` first:
+
+```bash
+./scripts/bootstrap.sh --dry-run --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --landing-zone-sub <shared-guid> --landing-zone-sub <prod-guid> --landing-zone-sub <avd-guid> --github-repo OWNER/REPO --environment production
+```
+
+It creates two things:
+
+- **The Terraform state storage:** ZRS, Entra ID auth only, versioning, soft delete and a delete lock.
+- **Two pipeline identities with OIDC federation, so no secrets are stored:**
+  - `-plan` is read-only.
+  - `-apply` gets Contributor + User Access Administrator on all five subscriptions.
+
+### 7. Configure GitHub
+
+1. **Repository variables:** add the ones the bootstrap script prints (*Settings → Secrets and variables → Actions → Variables*):
+   - `AZURE_TENANT_ID`, `AZURE_PLAN_CLIENT_ID`, `AZURE_APPLY_CLIENT_ID`;
+   - `CONNECTIVITY_SUBSCRIPTION_ID`;
+   - `TFSTATE_*`, `TF_ENVIRONMENT`.
+2. **Approval gate:** create the **environment** named in `TF_ENVIRONMENT` (default `production`) and add **required reviewers** (*Settings → Environments*). Every apply waits for them.
+3. **Branch protection:** protect `main` and require the `fmt / validate / test / lint` check before merging.
+
+### 8. First deployment
+
+1. In the designer, **Export → Write environments/production.tfvars**.
+2. Commit it on a branch and open a pull request. The **plan** job posts the plan to the run summary.
+3. Review the plan, and merge.
+4. An approver approves the **apply** in GitHub Actions. The landing zone deploys (about 30–45 minutes, mostly Bastion and the DCs).
+
+You can also run it from a workstation instead (see [Usage](#usage)): `terraform init`, then `plan` and `apply` with `-var-file=environments/production.tfvars`.
+
+### 9. Post-deployment
+
+- **Identity:**
+  - Promote the domain controllers, create AD sites and cut DNS over. Follow [docs/identity.md](docs/identity.md).
+  - Then set `identity_dns_servers` and re-apply.
+  - Lock the vault immutability once retention is final.
+- **Networking:**
+  - Confirm spoke egress goes through the NVAs.
+  - Run a zone failover drill: stop one NVA and check that traffic continues and the alert fires.
+- **Security:**
+  - Deploy Defender for Identity on the DCs.
+  - Enable Defender for Cloud plans.
+  - Assign the Azure landing zone policies at `mg-<org>`.
+- **Operations:**
+  - Confirm alert emails arrive.
+  - Check the budget and the first month's actual cost against the designer estimate.
+- **Third-party firewalls** (instead of, or alongside, the Linux NVAs): onboard per client with [modules/nva-firewall](modules/nva-firewall/README.md).
+
+---
+
 ## Architecture
 
 [![Architecture diagram: hub & spoke with HA NVAs in the connectivity subscription and region- and zone-redundant domain controllers in the tier-0 identity subscription](docs/architecture.drawio.svg)](docs/architecture.drawio.svg)
