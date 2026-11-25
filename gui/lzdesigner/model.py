@@ -11,7 +11,7 @@ import ipaddress
 import json
 from dataclasses import asdict, dataclass, field, fields
 
-from .catalog import REGIONS, RESILIENCE_PRESETS
+from .catalog import NVA_VENDORS, REGIONS, RESILIENCE_PRESETS, vm_vcpus
 
 FRAMEWORKS = ("WAF", "NIS2", "DORA")
 
@@ -105,6 +105,12 @@ class LandingZoneConfig:
     nva_zones: list[str] = field(default_factory=lambda: ["1", "2"])
     enable_resource_locks: bool = True
 
+    # --- firewall appliance ---------------------------------------------------
+    nva_vendor: str = "linux"                # linux | fortigate | sonicwall | paloalto | pfsense
+    nva_ha_mode: str = "active-active"       # single | active-standby | active-active
+    nva_license_type: str = ""               # "" = vendor default
+    nva_accept_marketplace_terms: bool = False
+
     # --- compute -----------------------------------------------------------
     nva_size: str = "Standard_D2s_v5"
     nva_cpu_alert_threshold: int = 75
@@ -191,6 +197,45 @@ class LandingZoneConfig:
             r.dc_zones = list(preset.dc_zones)
         self.identity_backup_storage_mode = preset.backup_mode
 
+    # ------------------------------------------------------------------ firewall
+    @property
+    def vendor(self):
+        return NVA_VENDORS.get(self.nva_vendor)
+
+    def set_nva_vendor(self, vendor: str) -> None:
+        """Switch vendor and coerce HA mode, licence and size to valid values."""
+        self.nva_vendor = vendor
+        v = NVA_VENDORS[vendor]
+        if self.nva_ha_mode not in v.ha_modes:
+            self.nva_ha_mode = v.ha_modes[0]
+        if self.nva_license_type not in v.licenses:
+            self.nva_license_type = ""
+        if vendor != "linux" and vm_vcpus(self.nva_size) < 4:
+            self.nva_size = "Standard_D4s_v5"
+
+    @property
+    def effective_license(self) -> str | None:
+        v = self.vendor
+        if not v or not v.licenses:
+            return None
+        return self.nva_license_type or v.default_license
+
+    def nva_count(self) -> int:
+        return {"single": 1, "active-standby": 2}.get(self.nva_ha_mode, len(self.nva_zones))
+
+    def nva_instance_zones(self) -> list[str]:
+        zones = self.nva_zones or ["1"]
+        return [zones[i % len(zones)] for i in range(self.nva_count())]
+
+    def nva_next_hop(self) -> str | None:
+        """ILB (active-active), floating trust VIP (active-standby) or the single firewall."""
+        try:
+            hub = ipaddress.IPv4Network(self.hub_address_space, strict=False)
+            internal = list(hub.subnets(new_prefix=hub.prefixlen + 3))[1]
+            return str(internal.network_address + (5 if self.nva_ha_mode == "single" else 4))
+        except (ValueError, IndexError):
+            return None
+
     def matching_preset(self) -> str:
         """The preset whose settings the config currently matches, else 'custom'."""
         for key, p in RESILIENCE_PRESETS.items():
@@ -260,11 +305,13 @@ class LandingZoneConfig:
             return None
 
     def nva_ips(self) -> list[tuple[str, str]]:
+        """(untrust, trust) per firewall. Linux: untrust .4+, vendors: .5+ (.4 = floating untrust VIP)."""
         try:
             hub = ipaddress.IPv4Network(self.hub_address_space, strict=False)
             subs = list(hub.subnets(new_prefix=hub.prefixlen + 3))
-            return [(str(subs[0].network_address + 4 + i), str(subs[1].network_address + 5 + i))
-                    for i in range(len(self.nva_zones))]
+            first = 4 if self.nva_vendor == "linux" else 5
+            return [(str(subs[0].network_address + first + i), str(subs[1].network_address + 5 + i))
+                    for i in range(self.nva_count())]
         except (ValueError, IndexError):
             return []
 

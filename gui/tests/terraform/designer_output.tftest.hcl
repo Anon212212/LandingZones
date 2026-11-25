@@ -15,6 +15,14 @@ mock_provider "azurerm" {
       display_name = "North Europe"
     }
   }
+
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "22222222-2222-2222-2222-222222222222"
+      object_id       = "33333333-3333-3333-3333-333333333333"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
 }
 
 mock_provider "azurerm" {

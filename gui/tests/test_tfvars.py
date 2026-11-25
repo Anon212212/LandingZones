@@ -7,7 +7,14 @@ ROOT = Path(__file__).resolve().parents[2]
 TF_VARS = set(re.findall(r'^variable "([a-z0-9_]+)"', (ROOT / "variables.tf").read_text(), re.M))
 
 # Terraform variables the designer deliberately leaves at their defaults.
-NOT_EXPOSED = {"log_analytics_sku", "network_watcher_name", "network_watcher_resource_group"}
+NOT_EXPOSED = {
+    "log_analytics_sku", "network_watcher_name", "network_watcher_resource_group",
+    # Secrets and vendor-specific bootstrap: set via TF_VAR_* / tfvars, never written by the designer.
+    "nva_admin_password", "nva_fortigate_license_tokens", "nva_paloalto_bootstrap",
+    "nva_paloalto_bootstrap_access_key", "nva_paloalto_mgmt_interface_swap", "nva_custom_data",
+    # Marketplace overrides: only when a vendor renames an offer/SKU.
+    "nva_marketplace_offer", "nva_marketplace_sku",
+}
 
 
 def test_every_designer_value_is_a_terraform_variable(cfg):
@@ -50,3 +57,14 @@ def test_spoke_subscriptions_render(cfg):
         sp.subscription = "connectivity"
     cfg.shared_services_subscription_id = ""
     assert "shared_services_subscription_id = " not in tfvars.render(cfg)
+
+
+def test_firewall_vendor_renders(cfg):
+    cfg.set_nva_vendor("fortigate")
+    cfg.nva_ha_mode = "active-standby"
+    v = tfvars.tfvars_values(cfg)
+    assert v["nva_vendor"] == "fortigate" and v["nva_ha_mode"] == "active-standby"
+    assert v["nva_size"] == "Standard_D4s_v5"          # bumped to >= 4 vCPUs
+    assert v["nva_license_type"] is None                # vendor default
+    cfg.set_nva_vendor("linux")
+    assert "nva_accept_marketplace_terms" not in tfvars.render(cfg)

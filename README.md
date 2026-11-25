@@ -146,7 +146,7 @@ python gui/app.py
 
 1. **Sign in to Azure** (top right) with your `az login` session.
 2. On **Basics**, pick the five subscriptions from the dropdowns, and set the org prefix, owner and cost centre.
-3. Adjust the network, resilience, identity regions and spokes. Switch on **NIS2 / DORA** if they apply to you.
+3. Choose the hub **firewall** (vendor, HA mode, licence) on the Firewall tab. Then adjust the network, resilience, identity regions and spokes. Switch on **NIS2 / DORA** if they apply to you.
 4. Press **Run checks** (pre-flight). Fix every red item: overlapping VNets, quota, missing permissions, zones.
 5. Check the **estimated monthly cost** (EUR).
 
@@ -235,7 +235,7 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 |---|---|
 | Connectivity | Hub, peerings, NAT Gateway |
 | Workload spokes | Any number (`spokes` map), each in its chosen subscription (`modules/spoke`): resource group, VNet, NSG with its own rules, route table to the NVAs, flow logs, diagnostics |
-| NVA | 2+ Ubuntu 24.04 VMs (one per zone, Trusted Launch, accelerated networking, platform patching), HA Ports ILB, cloud-init router/SNAT config |
+| Firewall (NVA) | `nva_vendor = "linux"` (default): 2+ Ubuntu 24.04 VMs (one per zone, Trusted Launch, accelerated networking, platform patching) behind an HA Ports ILB, with a cloud-init router/SNAT config. Or **FortiGate, Palo Alto VM-Series, SonicWall NSv or pfSense Plus** (`modules/vendors`) in `active-active` (ILB), `active-standby` (Azure API failover, managed identity, HA sync subnet) or `single` mode, with the admin password generated into a connectivity Key Vault |
 | Access | Azure Bastion (zone-redundant) |
 | Security | NSGs on every subnet + NVA NICs, optional DDoS plan, optional encryption at host |
 | Monitoring | Log Analytics, diagnostics on all network resources, VNet flow logs + Traffic Analytics, Azure Monitor Agent + DCR on NVAs |
@@ -337,6 +337,8 @@ terraform test
 | Variable | Default | Notes |
 |---|---|---|
 | `org_prefix` | — | **Required.** 2–15 lowercase chars. |
+| `nva_vendor` / `nva_ha_mode` / `nva_license_type` | `linux` / `active-active` / vendor default | Hub firewall: `linux`, `fortigate`, `paloalto`, `sonicwall`, `pfsense`. Vendors support `active-active`, `active-standby` (not pfSense) and `single`, and need `nva_size` ≥ 4 vCPUs. |
+| `nva_accept_marketplace_terms` | `false` | Accept the vendor image's Marketplace terms in the connectivity subscription. Vendor bootstrap inputs (`nva_fortigate_license_tokens`, `nva_paloalto_bootstrap`, …) go in tfvars or `TF_VAR_*`. |
 | `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, `subscription` (`connectivity` / `shared` / `prod` / `avd`), optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
 | `shared_services_subscription_id` / `production_subscription_id` / `avd_subscription_id` | — | **Required** when a spoke targets them. Must differ from each other, connectivity and identity. |
 | `owner`, `cost_center` | — | **Required.** Mandatory tags. |
@@ -383,6 +385,7 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
 | `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
 | `modules/nva-firewall/`, `modules/network-ha-pattern/`, `modules/vendors/` | Multi-client third-party firewall NVA framework (FortiGate, SonicWall, Palo Alto, pfSense) |
+| `firewall.tf` | Third-party firewall in the hub: vendor module, HA sync subnet, failover identity, admin password Key Vault |
 | `modules/spoke/` | One workload spoke in its landing-zone subscription: RG, VNet, NSG, route table, peering, flow logs, diagnostics |
 | `scripts/bootstrap.sh` | One-off: state storage + OIDC plan/apply identities for the pipeline |
 | `environments/` | Committed per-environment tfvars used by the deploy workflow |

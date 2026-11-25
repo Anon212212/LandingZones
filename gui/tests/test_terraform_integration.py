@@ -23,12 +23,14 @@ pytestmark = pytest.mark.skipif(not TF or not data_dir.exists(),
                                 reason="terraform not installed or not initialised (run terraform init)")
 
 
-@pytest.mark.parametrize("preset,frameworks,extra_region,custom_spokes", [
-    ("standard", ["WAF"], False, False),
-    ("maximum", ["WAF", "NIS2", "DORA"], True, False),
-    ("high", ["WAF", "DORA"], False, True),
+@pytest.mark.parametrize("preset,frameworks,extra_region,custom_spokes,firewall", [
+    ("standard", ["WAF"], False, False, None),
+    ("maximum", ["WAF", "NIS2", "DORA"], True, False, None),
+    ("high", ["WAF", "DORA"], False, True, None),
+    ("standard", ["WAF", "NIS2"], False, False, ("fortigate", "active-standby")),
+    ("high", ["WAF"], False, False, ("pfsense", "active-active")),
 ])
-def test_generated_tfvars_plan(cfg, tmp_path, preset, frameworks, extra_region, custom_spokes):
+def test_generated_tfvars_plan(cfg, tmp_path, preset, frameworks, extra_region, custom_spokes, firewall):
     cfg.apply_resilience(preset)
     cfg.frameworks = frameworks
     cfg.alert_email_addresses = ["oncall@contoso.com"]
@@ -39,6 +41,9 @@ def test_generated_tfvars_plan(cfg, tmp_path, preset, frameworks, extra_region, 
         cfg.add_spoke("web").nsg_rules = [NsgRule("Allow-HTTPS-From-Hub", 300, [cfg.hub_address_space], ["443"]),
                                           NsgRule("Deny-Legacy", 310, ["10.0.0.0/8"], ["1433-1434"], access="Deny")]
         cfg.add_spoke("data")
+    if firewall:
+        cfg.set_nva_vendor(firewall[0])
+        cfg.nva_ha_mode = firewall[1]
     compliance.enforce(cfg)
     var_file = tmp_path / "designer.tfvars"
     var_file.write_text(tfvars.render(cfg))

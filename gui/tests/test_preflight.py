@@ -58,6 +58,9 @@ class FakeTenant:
     def vm_skus(self, sub, location):
         return [sku("Standard_D2s_v5", "standardDSv5Family", 2, ["1", "2", "3"], self.restricted.get(location, ()))]
 
+    def marketplace_terms_accepted(self, sub, publisher, offer, plan):
+        return self.__dict__.get("terms", True)
+
     def usages(self, sub, location):
         return [{"name": {"value": "standardDSv5Family"}, "currentValue": 0, "limit": self.quota_free},
                 {"name": {"value": "cores"}, "currentValue": 0, "limit": self.quota_free}]
@@ -147,3 +150,14 @@ def test_landing_zone_subscriptions_are_checked(cfg):
     assert {"SUB-Shared services", "SUB-Production", "SUB-AVD", "RBAC-shared services", "RBAC-production", "RBAC-avd"} <= ids
     assert next(c for c in checks if c.id == "NET-OVERLAP").status == azure.FAIL
     assert next(c for c in checks if c.id == "RBAC-production").status == azure.WARN
+
+
+def test_marketplace_terms_checked_for_vendors(cfg):
+    assert not any(c.id == "MKT" for c in azure.run_preflight(cfg, FakeTenant()))   # linux: no image terms
+    cfg.set_nva_vendor("sonicwall")
+    tenant = FakeTenant(); tenant.terms = False
+    c = next(c for c in azure.run_preflight(cfg, tenant) if c.id == "MKT")
+    assert c.status == azure.FAIL and "az vm image terms accept" in c.detail
+    cfg.nva_accept_marketplace_terms = True
+    c = next(c for c in azure.run_preflight(cfg, tenant) if c.id == "MKT")
+    assert c.status == azure.INFO

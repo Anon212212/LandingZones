@@ -33,6 +33,20 @@ output "hub_subnet_ids" {
   }
 }
 
+output "nva_next_hop_ip" {
+  description = "Where spokes and identity send 0.0.0.0/0: ILB frontend (active-active), floating trust VIP (active-standby) or the firewall (single)."
+  value       = local.nva_next_hop_ip
+}
+
+output "nva_vendor" {
+  value = { vendor = var.nva_vendor, ha_mode = local.nva_ha_mode, count = local.nva_count }
+}
+
+output "nva_key_vault_name" {
+  description = "Key Vault holding the third-party NVA admin password (null for the built-in Linux NVA)."
+  value       = local.nva_linux ? null : azurerm_key_vault.nva[0].name
+}
+
 output "nva_ilb_frontend_ip" {
   description = "Next-hop IP used by every spoke route table."
   value       = local.nva_ilb_frontend_ip
@@ -41,10 +55,10 @@ output "nva_ilb_frontend_ip" {
 output "nva_private_ips" {
   value = [
     for i in range(local.nva_count) : {
-      name     = azurerm_linux_virtual_machine.nva[i].name
-      zone     = azurerm_linux_virtual_machine.nva[i].zone
-      external = local.nva_external_ips[i]
-      internal = local.nva_internal_ips[i]
+      name     = local.nva_names[i]
+      zone     = local.nva_linux ? azurerm_linux_virtual_machine.nva[i].zone : local.nva_vendor_network.instances[i].zone
+      external = local.nva_linux ? local.nva_external_ips[i] : local.nva_vendor_network.instances[i].untrust_ip
+      internal = local.nva_linux ? local.nva_internal_ips[i] : local.nva_vendor_network.instances[i].trust_ip
     }
   ]
 }

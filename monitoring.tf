@@ -8,12 +8,12 @@ locals {
     {
       bastion     = { id = azurerm_bastion_host.bastion.id, logs = true, metrics = true }
       pip_bastion = { id = azurerm_public_ip.bastion.id, logs = true, metrics = true }
-      ilb         = { id = azurerm_lb.nva_internal.id, logs = false, metrics = true }
       nsg_nva     = { id = azurerm_network_security_group.nva.id, logs = true, metrics = false }
       nsg_mgmt    = { id = azurerm_network_security_group.mgmt.id, logs = true, metrics = false }
       nsg_bastion = { id = azurerm_network_security_group.bastion.id, logs = true, metrics = false }
     },
     { for k, id in local.all_vnet_ids : "vnet_${k}" => { id = id, logs = true, metrics = true } },
+    local.nva_ha_mode == "active-active" ? { ilb = { id = azurerm_lb.nva_internal[0].id, logs = false, metrics = true } } : {},
     var.enable_nat_gateway ? {
       nat     = { id = azurerm_nat_gateway.nva[0].id, logs = false, metrics = true }
       pip_nat = { id = azurerm_public_ip.nat[0].id, logs = true, metrics = true }
@@ -190,9 +190,11 @@ resource "azurerm_monitor_action_group" "platform" {
 
 # [Reliability] An NVA failed its health probe (capacity halved).
 resource "azurerm_monitor_metric_alert" "ilb_backend_health" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name                = "alert-${var.org_prefix}-ilb-backend-health-${local.suffix}"
   resource_group_name = azurerm_resource_group.management.name
-  scopes              = [azurerm_lb.nva_internal.id]
+  scopes              = [azurerm_lb.nva_internal[0].id]
   description         = "One or more NVAs are failing the ILB health probe."
   severity            = 1
   frequency           = "PT1M"
@@ -217,9 +219,11 @@ resource "azurerm_monitor_metric_alert" "ilb_backend_health" {
 
 # [Reliability] ILB data path degraded – spoke traffic is affected.
 resource "azurerm_monitor_metric_alert" "ilb_datapath" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name                = "alert-${var.org_prefix}-ilb-datapath-${local.suffix}"
   resource_group_name = azurerm_resource_group.management.name
-  scopes              = [azurerm_lb.nva_internal.id]
+  scopes              = [azurerm_lb.nva_internal[0].id]
   description         = "ILB data path availability below 100%."
   severity            = 0
   frequency           = "PT1M"
@@ -246,7 +250,7 @@ resource "azurerm_monitor_metric_alert" "ilb_datapath" {
 resource "azurerm_monitor_metric_alert" "nva_availability" {
   name                     = "alert-${var.org_prefix}-nva-availability-${local.suffix}"
   resource_group_name      = azurerm_resource_group.management.name
-  scopes                   = azurerm_linux_virtual_machine.nva[*].id
+  scopes                   = local.nva_vm_ids
   target_resource_type     = "Microsoft.Compute/virtualMachines"
   target_resource_location = var.location
   description              = "An NVA VM is reporting unavailable."
@@ -275,7 +279,7 @@ resource "azurerm_monitor_metric_alert" "nva_availability" {
 resource "azurerm_monitor_metric_alert" "nva_cpu" {
   name                     = "alert-${var.org_prefix}-nva-cpu-${local.suffix}"
   resource_group_name      = azurerm_resource_group.management.name
-  scopes                   = azurerm_linux_virtual_machine.nva[*].id
+  scopes                   = local.nva_vm_ids
   target_resource_type     = "Microsoft.Compute/virtualMachines"
   target_resource_location = var.location
   description              = "NVA CPU above ${var.nva_cpu_alert_threshold}% for 15 minutes – consider scaling."

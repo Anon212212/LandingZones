@@ -8,6 +8,7 @@ A simple front end for this landing zone. Users pick options from dropdowns, swi
 - **validates every input** with the same rules as the Terraform variables (plus overlap and region checks Terraform can't express),
 - **enforces the compliance baseline** for the frameworks you switch on (WAF always, plus NIS2 and DORA), locking the settings they require,
 - **writes `terraform.tfvars`** for the Terraform in the repo root, and exports the diagram (editable draw.io), a compliance report and a re-openable project file,
+- **lets you pick the hub firewall** (built-in Linux, FortiGate, Palo Alto VM-Series, SonicWall NSv or pfSense Plus), its HA mode and licence from dropdowns,
 - **lets you add workload spokes** with their own NSG rules,
 - **estimates the monthly cost in euro** as you choose (bundled EUR baseline, or live prices from the Azure Retail Prices API),
 - **signs in to Azure (optional)** to pick subscriptions and run **pre-flight checks** against your tenant,
@@ -49,12 +50,13 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 
 1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, and the five subscriptions: connectivity, identity, shared services, production and AVD.
 2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, choose each spoke's **subscription** (connectivity, shared services, production or AVD), and give each one NSG rules. Choose NAT Gateway egress.
-3. **Resilience**: Standard / High / Maximum, or fine-tune zones, NVA size and delete locks.
-4. **Identity**: identity regions and DC zones, DC size and image, backup redundancy, tier-0 access and Key Vault firewall.
-5. **Security**: NVA SSH key, Bastion SKU, encryption at host, DDoS plan.
-6. **Operations**: alert recipients, log retention, flow logs, budget, CPU scaling signal.
-7. **Compliance**: switch on NIS2 and/or DORA and review every control and its references.
-8. **Export**: write `terraform.tfvars` (and `landingzone.json`) to the repo, or download them, plus the draw.io diagram and the compliance report. For the pipeline, fill in the GitHub repo and environment, write `environments/<env>.tfvars`, and copy the generated `scripts/bootstrap.sh` command.
+3. **Firewall**: choose the hub firewall vendor, its **high availability** mode (active/active behind the internal load balancer, active/standby with Azure API failover, or single), the **licence** (BYOL or Marketplace PAYG), a VM size (≥ 4 vCPUs for vendors), and whether Terraform accepts the Marketplace terms. The panel below explains routing, NIC layout, management and licensing for your choice.
+4. **Resilience**: Standard / High / Maximum, or fine-tune zones, NVA size and delete locks.
+5. **Identity**: identity regions and DC zones, DC size and image, backup redundancy, tier-0 access and Key Vault firewall.
+6. **Security**: NVA SSH key, Bastion SKU, encryption at host, DDoS plan.
+7. **Operations**: alert recipients, log retention, flow logs, budget, CPU scaling signal.
+8. **Compliance**: switch on NIS2 and/or DORA and review every control and its references.
+9. **Export**: write `terraform.tfvars` (and `landingzone.json`) to the repo, or download them, plus the draw.io diagram and the compliance report. For the pipeline, fill in the GitHub repo and environment, write `environments/<env>.tfvars`, and copy the generated `scripts/bootstrap.sh` command.
 
 Alongside the diagram:
 
@@ -88,6 +90,24 @@ Organisation, region and subscriptions on the left. One base `/16` plans every a
   <img src="../docs/images/designer-basics.png" width="49%" alt="Basics tab: org prefix, environment, owner, cost centre, region and subscriptions">
   <img src="../docs/images/designer-network.png" width="49%" alt="Network tab: automatic address plan from one /16 and the derived address table">
 </p>
+
+### Firewall appliance
+
+The **Firewall** tab picks what inspects all spoke, east-west and Internet traffic in the hub. Each choice is a dropdown. Options that don't apply are hidden: for example, pfSense offers no active/standby mode because CARP needs multicast, which Azure doesn't carry.
+
+<p>
+  <img src="../docs/images/designer-firewall-vendor.png" width="32%" alt="Firewall vendor dropdown: built-in Linux router, Fortinet FortiGate, Palo Alto Networks VM-Series, SonicWall NSv, Netgate pfSense Plus">
+  <img src="../docs/images/designer-firewall-ha.png" width="32%" alt="High availability dropdown: active/active internal load balancer, active/standby Azure API failover, single firewall">
+  <img src="../docs/images/designer-firewall-licence.png" width="32%" alt="Licence dropdown: vendor default, BYOL, pay-as-you-go">
+</p>
+
+Under the dropdowns, *What you get* summarises the result for the current choice: Marketplace image, routing (UDR next hop), NIC layout, management access and probe port, where the admin password is kept (generated into the connectivity Key Vault), licensing and vendor notes.
+
+![Firewall tab with FortiGate active/standby selected](../docs/images/designer-firewall.png)
+
+The diagram, cost estimate, compliance controls (SEC-18 inspecting firewall, REL-13 no single point of failure) and pre-flight follow the choice. Pre-flight also checks the vendor's **Marketplace terms** in the connectivity subscription. In active/standby the diagram shows the floating trust VIP instead of the load balancer:
+
+![Live architecture with a FortiGate active/standby pair](../docs/images/designer-diagram-firewall.png)
 
 ### Resilience and identity
 

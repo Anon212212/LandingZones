@@ -21,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from lzdesigner import azure, compliance, diagram, pricing, tfvars  # noqa: E402
 from lzdesigner.catalog import (BACKUP_MODES, BASTION_SKUS, DC_IMAGES, ENVIRONMENTS,  # noqa: E402
-                                REGIONS, RESILIENCE_PRESETS, VM_SIZES)
+                                NVA_HA_MODES, NVA_VENDOR_SIZES, NVA_VENDORS, REGIONS, RESILIENCE_PRESETS,
+                                VM_SIZES)
 from lzdesigner.model import SPOKE_SUBSCRIPTIONS, LandingZoneConfig  # noqa: E402
 from lzdesigner.validation import validate  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+ALL_NVA_SIZES = {**{v: k for k, v in VM_SIZES.items()}, **{v: k for k, v in NVA_VENDOR_SIZES.items()}}
 SUBSCRIPTION_FIELDS = [
     ("subscription_id", "Connectivity subscription"),
     ("identity_subscription_id", "Identity (tier-0) subscription"),
@@ -49,8 +51,8 @@ body { background: #F5F6F8; }
 .lz-section { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #605E5C; font-weight: 600; margin-top: 8px; }
 .lz-hint { font-size: 12px; color: #605E5C; }
 .lz-lock { font-size: 12px; color: #8764B8; }
-.q-tab__label { font-weight: 600; font-size: 12px; }
-.lz-tabs .q-tab { padding: 0 6px; min-width: 0; }
+.q-tab__label { font-weight: 600; font-size: 11.5px; }
+.lz-tabs .q-tab { padding: 0 5px; min-width: 0; }
 """
 
 
@@ -128,7 +130,7 @@ class Designer:
             ui.icon("hub", size="28px").classes("text-primary")
             with ui.column().classes("gap-0"):
                 ui.label("Landing Zone Designer").classes("text-lg font-semibold")
-                ui.label("Azure hub & spoke · HA NVAs · tier-0 identity — governed by WAF, NIS2 & DORA guardrails"
+                ui.label("Azure hub & spoke · firewall NVAs · tier-0 identity — governed by WAF, NIS2 & DORA guardrails"
                          ).classes("text-xs text-grey-7")
             ui.space()
             self.account_view()
@@ -152,7 +154,8 @@ class Designer:
         self.changed()
 
     def build_tabs(self) -> None:
-        names = [("Basics", "badge"), ("Network", "lan"), ("Resilience", "shield"), ("Identity", "admin_panel_settings"),
+        names = [("Basics", "badge"), ("Network", "lan"), ("Firewall", "local_fire_department"), ("Resilience", "shield"),
+                 ("Identity", "admin_panel_settings"),
                  ("Security", "lock"), ("Operations", "monitor_heart"), ("Compliance", "gavel"), ("Export", "ios_share")]
         with ui.tabs().props("dense no-caps").classes("w-full lz-tabs") as self.tabs:
             for n, icon in names:
@@ -162,6 +165,8 @@ class Designer:
                 self.tab_basics()
             with ui.tab_panel("Network"):
                 self.tab_network()
+            with ui.tab_panel("Firewall"):
+                self.firewall_view()
             with ui.tab_panel("Resilience"):
                 self.tab_resilience()
             with ui.tab_panel("Identity"):
@@ -324,10 +329,67 @@ class Designer:
             .props("outlined dense use-chips").classes("w-full")
         ui.select(ZONES, multiple=True, label="Zones for ILB, Bastion and public IPs").bind_value(c, "zones") \
             .on_value_change(self.changed).props("outlined dense use-chips").classes("w-full")
-        ui.select({v: k for k, v in VM_SIZES.items()}, label="NVA size").bind_value(c, "nva_size") \
+        ui.select(ALL_NVA_SIZES, label="Firewall / NVA size").bind_value(c, "nva_size") \
             .on_value_change(self.changed).props("outlined dense").classes("w-full")
         self.lock("enable_resource_locks", ui.switch("Delete locks on critical resources")
                   .bind_value(c, "enable_resource_locks").on_value_change(self.changed))
+
+    @ui.refreshable
+    def firewall_view(self) -> None:
+        c = self.cfg
+        v = c.vendor
+        ui.label("Choose the firewall that inspects all spoke, east-west and Internet traffic in the hub. "
+                 "The rest of the landing zone (subnets, routing, NSGs, NAT Gateway) adapts automatically.") \
+            .classes("lz-hint")
+        self.section("Appliance")
+        ui.select({k: x.label for k, x in NVA_VENDORS.items()}, label="Firewall vendor", value=c.nva_vendor,
+                  on_change=lambda e: (c.set_nva_vendor(e.value), self.firewall_view.refresh(), self.changed())) \
+            .props("outlined dense").classes("w-full")
+        ui.select({m: NVA_HA_MODES[m] for m in v.ha_modes}, label="High availability", value=c.nva_ha_mode,
+                  on_change=lambda e: (setattr(c, "nva_ha_mode", e.value), self.firewall_view.refresh(), self.changed())) \
+            .props("outlined dense").classes("w-full").set_enabled(len(v.ha_modes) > 1)
+        if v.licenses:
+            lic_opts = {"": f"Vendor default ({v.licenses[v.default_license]})", **v.licenses}
+            ui.select(lic_opts, label="Licence", value=c.nva_license_type,
+                      on_change=lambda e: (setattr(c, "nva_license_type", e.value or ""), self.firewall_view.refresh(),
+                                           self.changed())).props("outlined dense").classes("w-full")
+            sizes = {val: lbl for lbl, val in NVA_VENDOR_SIZES.items()}
+            if c.nva_size not in sizes:
+                sizes[c.nva_size] = c.nva_size
+            ui.select(sizes, label="VM size (>= 4 vCPUs for accelerated networking)", value=c.nva_size,
+                      on_change=lambda e: (setattr(c, "nva_size", e.value), self.changed())) \
+                .props("outlined dense").classes("w-full")
+            ui.switch("Accept Marketplace terms in the connectivity subscription",
+                      value=c.nva_accept_marketplace_terms,
+                      on_change=lambda e: (setattr(c, "nva_accept_marketplace_terms", e.value), self.changed()))
+        self.section("What you get")
+        mode_text = {
+            "active-active": f"{c.nva_count()} firewalls (one per NVA zone) behind the internal load balancer. "
+                             f"Spokes route 0.0.0.0/0 to the ILB frontend {c.ilb_ip()}.",
+            "active-standby": "2 firewalls across zones, no load balancer. Spokes route to the floating trust VIP "
+                              f"{c.nva_next_hop()}; on failover the firewalls move it via the Azure API "
+                              "(managed identity with a least-privilege role). Adds an HA sync subnet.",
+            "single": f"1 firewall, no high availability. Spokes route to its trust IP {c.nva_next_hop()}.",
+        }[c.nva_ha_mode]
+        nic = v.nic_layout.get(c.nva_ha_mode, v.nic_layout.get("*", ""))
+        with ui.card().tight().classes("w-full q-pa-md").style("border:1px solid #E1DFDD; border-radius:10px"):
+            for icon, title, text in [
+                ("dns", "Appliance", f"{v.product}" + (f" · {v.publisher}/{v.offer}" if v.publisher else "")),
+                ("alt_route", "Routing", mode_text),
+                ("settings_ethernet", "NICs", nic),
+                ("admin_panel_settings", "Management", f"{v.management} · LB probe port {v.probe_port}"),
+                ("key", "Admin password",
+                 "SSH key (Security tab)" if c.nva_vendor == "linux" else
+                 "Generated and stored in the connectivity Key Vault – no pipeline secret needed"),
+                ("receipt_long", "Licence",
+                 "–" if not v.licenses else v.licenses[c.effective_license]),
+                ("info", "Notes", v.notes),
+            ]:
+                with ui.row().classes("w-full no-wrap items-start gap-3 q-py-xs"):
+                    ui.icon(icon, color="primary", size="20px")
+                    with ui.column().classes("gap-0"):
+                        ui.label(title).classes("text-sm font-semibold")
+                        ui.label(text).classes("lz-hint")
 
     @ui.refreshable
     def resilience_cards(self) -> None:

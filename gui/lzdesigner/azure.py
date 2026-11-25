@@ -125,6 +125,11 @@ class ArmClient:
     def usages(self, sub: str, location: str) -> list[dict]:
         return self.get(f"/subscriptions/{sub}/providers/Microsoft.Compute/locations/{location}/usages", "2023-09-01")
 
+    def marketplace_terms_accepted(self, sub: str, publisher: str, offer: str, plan: str) -> bool:
+        data = self.get(f"/subscriptions/{sub}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/"
+                        f"publishers/{publisher}/offers/{offer}/plans/{plan}/agreements/current", "2021-01-01")
+        return bool(data.get("properties", {}).get("accepted"))
+
     def role_assignments(self, sub: str, principal_id: str) -> list[dict]:
         return self.get(f"/subscriptions/{sub}/providers/Microsoft.Authorization/roleAssignments", "2022-04-01",
                         {"$filter": f"assignedTo('{principal_id}')"})
@@ -305,7 +310,7 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
 
     # 6 + 7. VM sizes, zones and quota ---------------------------------------------
     def capacity():
-        demand = [(conn, cfg.location, cfg.nva_size, list(cfg.nva_zones), "NVAs", "Resilience")]
+        demand = [(conn, cfg.location, cfg.nva_size, cfg.nva_instance_zones(), "firewalls", "Resilience")]
         demand += [(ident, r.location, cfg.dc_size, list(r.dc_zones), f"DCs ({r.key})", "Identity")
                    for r in cfg.identity_regions]
         sku_cache: dict[tuple[str, str], list[dict]] = {}
@@ -344,6 +349,25 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
                 add(cid, title, PASS if free >= entry["vcpus"] else FAIL,
                     detail if free >= entry["vcpus"] else f"{detail} – request a quota increase.", entry["section"])
     guarded("CAP", "VM sizes, zones and quota", "Resilience", capacity)
+
+    # 7b. Marketplace terms for a third-party firewall image ------------------------
+    def marketplace():
+        v = cfg.vendor
+        if not v or not v.publisher or conn not in subs:
+            return
+        sku = v.skus.get(cfg.effective_license or "")
+        accepted = client.marketplace_terms_accepted(conn, v.publisher, v.offer, sku)
+        where = f"{v.publisher} / {v.offer} / {sku}"
+        if accepted:
+            add("MKT", f"Marketplace terms for {v.label}", PASS, f"{where}: accepted", "Firewall")
+        elif cfg.nva_accept_marketplace_terms:
+            add("MKT", f"Marketplace terms for {v.label}", INFO,
+                f"{where}: not yet accepted – Terraform will accept them (nva_accept_marketplace_terms).", "Firewall")
+        else:
+            add("MKT", f"Marketplace terms for {v.label}", FAIL,
+                f"{where}: not accepted. Switch on 'Accept Marketplace terms' on the Firewall tab, or run "
+                f"`az vm image terms accept --publisher {v.publisher} --offer {v.offer} --plan {sku}`.", "Firewall")
+    guarded("MKT", "Marketplace terms", "Firewall", marketplace)
 
     # 8. Zones for zone-redundant resources (ILB, Bastion, public IPs) ---------------
     def region_zones():

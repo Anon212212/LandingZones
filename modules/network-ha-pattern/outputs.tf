@@ -90,3 +90,8 @@ output "public_ip_ids" {
 output "ha_mode" {
   value = var.ha_mode
 }
+
+output "lb_join" {
+  description = "Which NIC roles join a load balancer backend pool (plan-time known)."
+  value       = { trust = var.ha_mode == "active-active", untrust = var.ha_mode == "active-active" }
+}

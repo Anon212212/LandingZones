@@ -46,6 +46,7 @@ SECTIONS: list[tuple[str, list[str]]] = [
     ("Network", ["hub_address_space", "enable_nat_gateway", "nva_mgmt_source_cidrs"]),
     ("Spokes", ["spokes"]),
     ("Resilience", ["zones", "nva_zones", "enable_resource_locks"]),
+    ("Firewall appliance", ["nva_vendor", "nva_ha_mode", "nva_license_type", "nva_accept_marketplace_terms"]),
     ("NVAs", ["nva_admin_username", "nva_admin_ssh_public_key", "nva_size", "nva_cpu_alert_threshold",
               "nva_encryption_at_host"]),
     ("Security", ["ddos_protection_plan_id", "bastion_sku"]),
@@ -79,6 +80,10 @@ def tfvars_values(cfg: LandingZoneConfig) -> dict:
                             "protocol": r.protocol, "source_address_prefixes": r.source_address_prefixes,
                             "destination_port_ranges": r.destination_port_ranges} for r in sp.nsg_rules]
                     v[sp.key] = item
+            if n == "nva_license_type":
+                v = cfg.nva_license_type or None
+            if n == "nva_accept_marketplace_terms" and cfg.nva_vendor == "linux":
+                v = None
             if n in ("ddos_protection_plan_id", "shared_services_subscription_id", "production_subscription_id",
                      "avd_subscription_id") and not v:
                 v = None

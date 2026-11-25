@@ -118,8 +118,11 @@ def build(cfg: LandingZoneConfig) -> Model:
     m = Model(height=body_bottom + 70)
     m.badges = list(cfg.frameworks)
 
+    vendor = cfg.vendor
+    linux = cfg.nva_vendor == "linux"
     m.node("title", 20, 14, 1100, 30, "title",
-           [f"{cfg.org_prefix} · {cfg.environment} — hub & spoke with HA NVAs and tier-0 identity"])
+           [f"{cfg.org_prefix} · {cfg.environment} — hub & spoke with "
+            f"{'HA NVAs' if linux else (vendor.label if vendor else 'NVAs')} and tier-0 identity"])
     m.node("internet", 420, 58, 200, 56, "cloud", ["Internet"], stroke=C["grey"], fill="#FFFFFF")
 
     # ---------------------------------------------------------- connectivity
@@ -137,21 +140,38 @@ def build(cfg: LandingZoneConfig) -> Model:
     else:
         m.node("nat", 80, 280, 205, 62, "res", ["No NAT Gateway", "egress needs another path"],
                parent="sn_ext", stroke=C["off"])
-    m.node("ilb", 80, 408, 205, 66, "res",
-           ["Internal Load Balancer", f"{cfg.ilb_ip() or '?'} · zone-redundant", "HA Ports → NVA pool"],
-           parent="sn_int", stroke=C["blue"])
+    next_hop = cfg.nva_next_hop() or "?"
+    if cfg.nva_ha_mode == "active-active":
+        m.node("ilb", 80, 408, 205, 66, "res",
+               ["Internal Load Balancer", f"{cfg.ilb_ip() or '?'} · zone-redundant", "HA Ports → firewall pool"],
+               parent="sn_int", stroke=C["blue"])
+    elif cfg.nva_ha_mode == "active-standby":
+        m.node("ilb", 80, 408, 205, 66, "res",
+               ["Floating trust VIP", f"{next_hop} · moves on failover", "Azure API · managed identity"],
+               parent="sn_int", stroke=C["orange"])
+    else:
+        m.node("ilb", 80, 408, 205, 66, "res",
+               ["No load balancer", f"UDR → fw01 {next_hop}", "single point of failure"],
+               parent="sn_int", stroke=C["off"])
 
-    n = max(len(cfg.nva_zones), 1)
+    zones = cfg.nva_instance_zones()
+    n = max(len(zones), 1)
     area_x, area_w, gap = 320, 340, 12
     bw = (area_w - gap * (n - 1)) / n
     ips = cfg.nva_ips()
-    for i, z in enumerate(cfg.nva_zones):
+    product = vendor.product if vendor else cfg.nva_vendor
+    role = {"active-standby": ["active", "standby"]}.get(cfg.nva_ha_mode, [])
+    for i, z in enumerate(zones):
         ext, inn = ips[i] if i < len(ips) else ("?", "?")
+        state = f"{role[i]} · " if i < len(role) else ""
         if n <= 2:
-            lines = [f"NVA-{i+1} · Zone {z}", f"Ubuntu 24.04 · {_size_short(cfg.nva_size)}", "",
-                     f"eth0  {ext}", "", "IP forwarding · SNAT", "", f"eth1  {inn}"]
+            lines = [f"{'NVA' if linux else 'FW'}-{i+1} · Zone {z}",
+                     f"{'Ubuntu 24.04' if linux else product} · {_size_short(cfg.nva_size)}", "",
+                     f"untrust  {ext}", "",
+                     "IP forwarding · SNAT" if linux else f"{state}{(cfg.effective_license or '').upper()} licence",
+                     "", f"trust  {inn}"]
         else:
-            lines = [f"NVA-{i+1}", f"Zone {z}", "", "eth0", ext, "", "eth1", inn]
+            lines = [f"{'NVA' if linux else 'FW'}-{i+1}", f"Zone {z}", "", "untrust", ext, "", "trust", inn]
         m.node(f"nva{i+1}", area_x + i * (bw + gap), 276, bw, 200, "res", lines, parent="hub", stroke=C["orange"])
 
     m.node("sn_mgmt", 690, 248, 290, 110, "subnet", [f"snet-mgmt · {hs.get('mgmt', '?')}"], parent="hub")
@@ -159,7 +179,9 @@ def build(cfg: LandingZoneConfig) -> Model:
     m.node("sn_bas", 690, 372, 290, 115, "subnet", [f"AzureBastionSubnet · {hs.get('bastion', '?')}"], parent="hub")
     m.node("bastion", 710, 408, 250, 66, "res", [f"Azure Bastion · {cfg.bastion_sku}", "zone-redundant", "only admin entry point"],
            parent="sn_bas", stroke=C["blue"])
-    notes = ["NSG on every subnet", "private subnets"]
+    notes = [vendor.label if vendor else cfg.nva_vendor, "NSG on every subnet", "private subnets"]
+    if cfg.nva_ha_mode == "active-standby" and not linux:
+        notes.append("HA sync subnet")
     if cfg.enable_flow_logs:
         notes.append("VNet flow logs")
     if cfg.ddos_protection_plan_id:
@@ -170,7 +192,7 @@ def build(cfg: LandingZoneConfig) -> Model:
         notes.append("delete locks")
     m.node("hub_note", 60, 498, 920, 34, "note", [" · ".join(notes)], parent="hub")
 
-    ilb = cfg.ilb_ip() or "ILB"
+    ilb = next_hop
     # Spokes grouped by subscription so each landing zone forms one frame.
     order = {"connectivity": 0, "shared": 1, "prod": 2, "avd": 3}
     ordered = sorted(cfg.spokes, key=lambda sp: order.get(sp.subscription, 9))
@@ -231,7 +253,9 @@ def build(cfg: LandingZoneConfig) -> Model:
             f"€{cfg.monthly_budget_amount:,.0f} / month" if cfg.monthly_budget_amount > 0 else "no budget set",
             f"owner: {cfg.owner or '—'}"], parent="mgmt_rg", stroke=C["blue"])
     m.node("mgmt_note", 60, 965 + dy, 920, 34, "note",
-           ["Azure Monitor Agent + DCR on NVAs · CI: fmt / validate / test / tflint / checkov"], parent="mgmt_rg")
+           ["Azure Monitor Agent + DCR on NVAs · CI: fmt / validate / test / tflint / checkov" if linux else
+            f"{vendor.label if vendor else 'Firewall'} logs: forward syslog / vendor connector to Log Analytics · "
+            "CI: fmt / validate / test / tflint / checkov"], parent="mgmt_rg")
 
     # ---------------------------------------------------------- identity
     m.node("sub_id", 1060, 150, 580, id_bottom - 150, "container",
@@ -292,7 +316,8 @@ def build(cfg: LandingZoneConfig) -> Model:
     if cfg.enable_nat_gateway:
         m.edge("e_inet_nat", "internet", "nat", [(470, 114), (470, 132), (255, 132), (255, 280)], "egress (SNAT)", "traffic")
     m.edge("e_inet_bas", "internet", "bastion", [(620, 86), (990, 86), (990, 441), (960, 441)], "HTTPS 443 · admins", "traffic")
-    m.edge("e_ilb_nva", "ilb", "nva1", [(285, 441), (320, 441)], "", "traffic")
+    if cfg.nva_ha_mode != "single":
+        m.edge("e_ilb_nva", "ilb", "nva1", [(285, 441), (320, 441)], "", "traffic")
     for key, x, w, row, y in spoke_boxes:
         if row == 0:  # later rows are labelled "peered to hub" to keep the drawing clean
             cx = round(x + w / 2)

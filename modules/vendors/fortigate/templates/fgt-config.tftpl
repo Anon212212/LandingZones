@@ -78,6 +78,7 @@ config system sdn-connector
         set ha-status enable
         set use-metadata-iam enable
         config nic
+%{ if cluster_public_ip_name != "" ~}
             edit "${untrust_nic_name}"
                 config ip
                     edit "${vip_ip_config_name}"
@@ -85,6 +86,7 @@ config system sdn-connector
                     next
                 end
             next
+%{ endif ~}
             edit "${trust_nic_name}"
                 config ip
                     edit "${vip_ip_config_name}"
