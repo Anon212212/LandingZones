@@ -102,14 +102,132 @@ variable "avd_address_space" {
   }
 }
 
-variable "id_address_space" {
-  description = "Identity (domain controller) spoke VNet CIDR. The DC subnet is its first eighth (/27 for a /24)."
+#############################################
+# Identity (tier-0) – dedicated subscription, region + zone redundant
+#############################################
+
+variable "identity_subscription_id" {
+  description = "[Security] Dedicated tier-0 subscription for domain controllers, their vaults, Key Vault and Log Analytics. Must differ from the connectivity subscription."
   type        = string
-  default     = "10.145.4.0/24"
 
   validation {
-    condition     = can(cidrhost(var.id_address_space, 0))
-    error_message = "id_address_space must be a valid CIDR."
+    condition     = can(regex("^[0-9a-fA-F-]{36}$", var.identity_subscription_id))
+    error_message = "identity_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.subscription_id == null || lower(coalesce(var.subscription_id, "-")) != lower(var.identity_subscription_id)
+    error_message = "Tier-0 identity must live in its own subscription, separate from connectivity."
+  }
+}
+
+variable "identity_regions" {
+  description = <<-EOT
+    [Reliability] Identity deployments, one per region. Each region gets its own
+    VNet, one DC per zone in dc_zones, and its own Recovery Services vault.
+    next_hop_ip defaults to the hub NVA ILB (set it to a regional hub's
+    firewall when you add one).
+  EOT
+  type = map(object({
+    location      = string
+    address_space = string
+    dc_zones      = optional(list(string), ["1", "2"])
+    next_hop_ip   = optional(string)
+  }))
+  default = {
+    primary = {
+      location      = "northeurope"
+      address_space = "10.145.4.0/24"
+    }
+    secondary = {
+      location      = "westeurope"
+      address_space = "10.146.4.0/24"
+    }
+  }
+
+  validation {
+    condition     = length(var.identity_regions) >= 2 && length(distinct([for r in values(var.identity_regions) : r.location])) == length(var.identity_regions)
+    error_message = "Identity needs at least two entries in different regions for regional redundancy."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.identity_regions) : length(r.dc_zones) >= 2 && length(distinct(r.dc_zones)) == length(r.dc_zones)])
+    error_message = "Each identity region needs at least two DCs in distinct zones."
+  }
+
+  validation {
+    condition     = alltrue([for r in values(var.identity_regions) : can(cidrhost(r.address_space, 0))])
+    error_message = "Every identity address_space must be a valid CIDR."
+  }
+}
+
+variable "dc_size" {
+  description = "Domain controller VM size (Trusted Launch + accelerated networking capable)."
+  type        = string
+  default     = "Standard_D2s_v5"
+}
+
+variable "dc_admin_username" {
+  description = "Local admin on the DC build. The generated password is stored in the tier-0 Key Vault."
+  type        = string
+  default     = "dcadmin"
+
+  validation {
+    condition     = !contains(["administrator", "admin", "user", "guest", "root"], lower(var.dc_admin_username))
+    error_message = "dc_admin_username cannot be a reserved Windows name."
+  }
+}
+
+variable "dc_image_sku" {
+  description = "WindowsServer Gen2 image SKU for DCs."
+  type        = string
+  default     = "2025-datacenter-azure-edition"
+}
+
+variable "dc_data_disk_size_gb" {
+  description = "Size of the NTDS/SYSVOL data disk."
+  type        = number
+  default     = 64
+}
+
+variable "dc_hybrid_benefit" {
+  description = "[Cost] Apply Azure Hybrid Benefit to the DCs (requires eligible Windows Server licences)."
+  type        = bool
+  default     = false
+}
+
+variable "identity_admin_source_cidrs" {
+  description = "[Security] Extra networks allowed to RDP to DCs, e.g. a PAW subnet."
+  type        = list(string)
+  default     = []
+}
+
+variable "identity_allow_hub_bastion" {
+  description = "[Security] Allow RDP to DCs from the shared hub Bastion. Disable when tier-0 admins use dedicated PAWs."
+  type        = bool
+  default     = true
+}
+
+variable "identity_dns_servers" {
+  description = "DNS servers for the identity VNets. Leave [] for the build, then set to the DC IPs after promotion."
+  type        = list(string)
+  default     = []
+}
+
+variable "identity_key_vault_allowed_ips" {
+  description = "[Security] Public IPs/CIDRs (e.g. the deployment agent) allowed to the tier-0 Key Vault. Empty = public access allowed (RBAC still required)."
+  type        = list(string)
+  default     = []
+}
+
+variable "identity_backup_storage_mode" {
+  description = "[Reliability] Recovery Services vault redundancy. ZoneRedundant protects against zone loss; each region already has its own vault for regional loss. GeoRedundant adds Cross Region Restore."
+  type        = string
+  default     = "ZoneRedundant"
+
+  validation {
+    condition     = contains(["ZoneRedundant", "GeoRedundant"], var.identity_backup_storage_mode)
+    error_message = "identity_backup_storage_mode must be ZoneRedundant or GeoRedundant."
   }
 }
 

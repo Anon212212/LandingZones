@@ -61,3 +61,29 @@ output "action_group_id" {
   description = "Platform alert action group (null when no alert_email_addresses)."
   value       = one(local.action_group_ids)
 }
+
+#############################################
+# Identity (tier-0)
+#############################################
+
+output "identity_domain_controllers" {
+  description = "Domain controllers per identity region (name, NetBIOS name, zone, static IP, Key Vault secret)."
+  value       = { for k, m in module.identity : k => m.domain_controllers }
+}
+
+output "identity_dc_ips" {
+  description = "Use as DNS servers for the identity VNets and spokes once the DCs are promoted."
+  value       = flatten([for k in keys(var.identity_regions) : module.identity[k].dc_ips])
+}
+
+output "identity_recovery_services_vault_ids" {
+  value = { for k, m in module.identity : k => m.recovery_services_vault_id }
+}
+
+output "identity_key_vault_name" {
+  value = azurerm_key_vault.identity.name
+}
+
+output "identity_log_analytics_workspace_id" {
+  value = azurerm_log_analytics_workspace.identity.id
+}

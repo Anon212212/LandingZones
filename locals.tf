@@ -3,7 +3,7 @@ locals {
   # Naming – Cloud Adoption Framework convention
   #   <resource-abbr>-<org>-<component>-<env>-<region>
   #############################################
-  region_short = lookup({
+  region_short_map = {
     northeurope        = "neu"
     westeurope         = "weu"
     uksouth            = "uks"
@@ -17,7 +17,8 @@ locals {
     westus3            = "wus3"
     centralus          = "cus"
     australiaeast      = "aue"
-  }, var.location, var.location)
+  }
+  region_short = lookup(local.region_short_map, var.location, var.location)
 
   suffix = "${var.environment}-${local.region_short}"
 
@@ -98,14 +99,13 @@ locals {
       subnet_name   = "snet-avd-sessionhosts"
       subnet_prefix = var.avd_address_space
     }
-    identity = {
-      address_space = var.id_address_space
-      subnet_name   = "snet-dc"
-      subnet_prefix = cidrsubnet(var.id_address_space, 3, 0)
-    }
   }
 
-  spoke_address_spaces = [for s in local.spokes : s.address_space]
+  # Everything the NVAs must route back through their internal NIC.
+  spoke_address_spaces = concat(
+    [for s in local.spokes : s.address_space],
+    [for r in values(var.identity_regions) : r.address_space],
+  )
 
   # Every VNet (hub + spokes) – used for flow logs and diagnostics.
   all_vnet_ids = merge(

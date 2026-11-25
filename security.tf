@@ -272,7 +272,7 @@ resource "azurerm_subnet_network_security_group_association" "hub_bastion" {
 #############################################
 
 resource "azurerm_network_security_group" "spoke" {
-  for_each = { for k, v in local.spokes : k => v if k != "identity" }
+  for_each = local.spokes
 
   name                = "nsg-${var.org_prefix}-${each.key}-${local.suffix}"
   location            = var.location
@@ -334,84 +334,4 @@ resource "azurerm_subnet_network_security_group_association" "spoke" {
 
   subnet_id                 = azurerm_subnet.spoke[each.key].id
   network_security_group_id = each.value.id
-}
-
-#############################################
-# Identity / DC subnet NSG
-#############################################
-
-resource "azurerm_network_security_group" "id_dc" {
-  name                = "nsg-${var.org_prefix}-identity-${local.suffix}"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.connectivity.name
-  tags                = local.tags
-
-  # Full AD DS port set (client logon, Kerberos pw change, LDAPS, GC,
-  # ADWS, NTP and dynamic RPC used by replication/DFSR/netlogon).
-  security_rule {
-    name                       = "Allow-AD-TCP"
-    priority                   = 100
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_ranges    = ["53", "88", "135", "389", "445", "464", "636", "3268-3269", "9389", "49152-65535"]
-    source_address_prefix      = "VirtualNetwork"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Allow-AD-UDP"
-    priority                   = 110
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Udp"
-    source_port_range          = "*"
-    destination_port_ranges    = ["53", "88", "123", "389", "464"]
-    source_address_prefix      = "VirtualNetwork"
-    destination_address_prefix = "*"
-  }
-
-  # RDP arrives from AzureBastionSubnet when using Bastion.
-  security_rule {
-    name                       = "Allow-RDP-From-Bastion-Mgmt"
-    priority                   = 200
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "3389"
-    source_address_prefixes    = [local.hub_subnets.bastion, local.hub_subnets.mgmt]
-    destination_address_prefix = "*"
-  }
-
-  # Default AllowAzureLoadBalancerInBound sits below Deny-All, so restate it.
-  security_rule {
-    name                       = "Allow-AzureLoadBalancer"
-    priority                   = 4000
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "AzureLoadBalancer"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "Deny-All-Inbound"
-    priority                   = 4096
-    direction                  = "Inbound"
-    access                     = "Deny"
-    protocol                   = "*"
-    source_port_range          = "*"
-    destination_port_range     = "*"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-}
-
-resource "azurerm_subnet_network_security_group_association" "id_dc" {
-  subnet_id                 = azurerm_subnet.spoke["identity"].id
-  network_security_group_id = azurerm_network_security_group.id_dc.id
 }

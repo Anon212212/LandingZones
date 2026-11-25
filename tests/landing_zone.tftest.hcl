@@ -17,7 +17,28 @@ mock_provider "azurerm" {
   }
 }
 
+mock_provider "azurerm" {
+  alias = "identity"
+
+  mock_data "azurerm_subscription" {
+    defaults = {
+      id              = "/subscriptions/11111111-1111-1111-1111-111111111111"
+      subscription_id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "22222222-2222-2222-2222-222222222222"
+      object_id       = "33333333-3333-3333-3333-333333333333"
+      subscription_id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+
 variables {
+  subscription_id          = "00000000-0000-0000-0000-000000000000"
+  identity_subscription_id = "11111111-1111-1111-1111-111111111111"
   org_prefix               = "contoso"
   owner                    = "platform-team"
   cost_center              = "cc-1234"
@@ -122,8 +143,8 @@ run "operational_excellence_controls" {
   command = plan
 
   assert {
-    condition     = length(azurerm_network_watcher_flow_log.vnet) == 5
-    error_message = "Hub and all four spokes need VNet flow logs."
+    condition     = length(azurerm_network_watcher_flow_log.vnet) == 4 && alltrue([for m in module.identity : length(m.dc_ips) > 0])
+    error_message = "Hub and all three workload spokes need VNet flow logs."
   }
 
   assert {
@@ -188,4 +209,65 @@ run "rejects_single_zone_nva" {
   }
 
   expect_failures = [var.nva_zones]
+}
+
+run "identity_is_tier0_region_and_zone_redundant" {
+  command = plan
+
+  assert {
+    condition     = length(module.identity) == 2 && length(distinct([for r in values(var.identity_regions) : r.location])) == 2
+    error_message = "Identity must be deployed to two regions."
+  }
+
+  assert {
+    condition     = alltrue([for k, m in module.identity : length(distinct([for dc in m.domain_controllers : dc.zone])) >= 2])
+    error_message = "Each identity region needs DCs in at least two zones."
+  }
+
+  assert {
+    condition     = output.identity_dc_ips == ["10.145.4.4", "10.145.4.5", "10.146.4.4", "10.146.4.5"]
+    error_message = "DC static IPs are wrong."
+  }
+
+  assert {
+    condition     = length(azurerm_virtual_network_peering.hub_to_identity) == 2 && length(azurerm_virtual_network_peering.identity_mesh) == 2
+    error_message = "Each identity VNet must peer with the hub and with every other identity VNet."
+  }
+
+  assert {
+    condition     = azurerm_key_vault.identity.purge_protection_enabled && azurerm_key_vault.identity.rbac_authorization_enabled
+    error_message = "Tier-0 Key Vault needs purge protection and RBAC."
+  }
+
+  assert {
+    condition     = azurerm_log_analytics_workspace.identity.retention_in_days >= 365 && azurerm_log_analytics_workspace.identity.local_authentication_enabled == false
+    error_message = "Tier-0 workspace needs >= 365 days retention and Entra-only auth."
+  }
+
+  assert {
+    condition     = contains(local.spoke_address_spaces, "10.146.4.0/24")
+    error_message = "NVAs must route identity prefixes back via the internal NIC."
+  }
+}
+
+run "rejects_identity_in_connectivity_subscription" {
+  command = plan
+
+  variables {
+    identity_subscription_id = "00000000-0000-0000-0000-000000000000"
+  }
+
+  expect_failures = [var.identity_subscription_id]
+}
+
+run "rejects_single_region_identity" {
+  command = plan
+
+  variables {
+    identity_regions = {
+      primary = { location = "northeurope", address_space = "10.145.4.0/24" }
+    }
+  }
+
+  expect_failures = [var.identity_regions]
 }

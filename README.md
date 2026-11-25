@@ -2,7 +2,14 @@
 
 Terraform for an Azure **hub & spoke** network with a **highly available NVA pair** behind an internal Standard Load Balancer (HA Ports), aligned to the **Azure Well-Architected Framework** and Cloud Adoption Framework naming.
 
-➡️ **[Well-Architected alignment, pillar by pillar](docs/well-architected.md)**
+➡️ **[Well-Architected alignment, pillar by pillar](docs/well-architected.md)** · **[Identity (tier-0) design & runbook](docs/identity.md)**
+
+Two subscriptions:
+
+| Subscription | Contents |
+|---|---|
+| Connectivity | Hub, workload spokes (shared, prod, avd), HA NVAs, Bastion, NAT Gateway, platform monitoring |
+| Identity (tier-0) | Domain controllers in two regions × two zones, a Recovery Services vault per region, tier-0 Key Vault and Log Analytics |
 
 ---
 
@@ -21,10 +28,13 @@ Terraform for an Azure **hub & spoke** network with a **highly available NVA pai
  │                        ILB frontend .36 (HA Ports, zone-redundant)   │
  │ snet-mgmt .64/27            AzureBastionSubnet .96/27 (zone-redundant)│
  └──────────────┬───────────┬───────────┬───────────┬───────────────────┘
-           peering     peering     peering     peering
-                │           │           │           │
-            shared        prod         avd       identity
-         10.145.1/24  10.145.2/24  10.145.3/24  10.145.4/24
+           peering     peering     peering     peering ─────── global peering
+                │           │           │           │                   │
+            shared        prod         avd     identity (neu)  ◄──► identity (weu)
+         10.145.1/24  10.145.2/24  10.145.3/24  10.145.4/24        10.146.4/24
+                                               DC z1 + DC z2       DC z1 + DC z2
+                                               RSV (ZRS)           RSV (ZRS)
+                                             └──────── identity subscription ────────┘
 ```
 
 Every spoke subnet has a UDR sending `0.0.0.0/0` to the ILB frontend, so spoke↔spoke and spoke→Internet traffic always goes through the NVAs. All workload subnets are private (no default outbound access).
@@ -42,7 +52,8 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 | shared | `10.145.1.0/24` | `snet-shared-app` | `/24` | spoke baseline |
 | prod | `10.145.2.0/24` | `snet-prod-app` | `/24` | spoke baseline |
 | avd | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
-| identity | `10.145.4.0/24` | `snet-dc` | `/27` | AD DS |
+| identity (primary, identity sub) | `10.145.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
+| identity (secondary, identity sub) | `10.146.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 
 ### What's deployed
 
@@ -54,16 +65,17 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 | Security | NSGs on every subnet + NVA NICs, optional DDoS plan, optional encryption at host |
 | Monitoring | Log Analytics, diagnostics on all network resources, VNet flow logs + Traffic Analytics, Azure Monitor Agent + DCR on NVAs |
 | Alerting | ILB health/data path, NVA availability and CPU, NAT SNAT failures, Service Health, Resource Health |
+| Identity (tier-0) | Dedicated subscription. Per region: VNet, one Windows Server 2025 DC per zone (static IP, NTDS disk with caching off, Trusted Launch), a ZRS immutable Recovery Services vault with an Enhanced daily policy. Shared: tier-0 Key Vault (generated admin passwords), tier-0 Log Analytics, DCR, identity mesh peering |
 | Governance | Mandatory tags, delete locks, monthly budget |
 
 ---
 
 ## Usage
 
-Prerequisites: Terraform ≥ 1.9 and Azure CLI login (or a service principal / OIDC).
+Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and two subscriptions in the same tenant (connectivity and identity). The deploying identity needs Owner (or Contributor + User Access Administrator) on both, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
 
 ```bash
-cp terraform.tfvars.example terraform.tfvars   # set org_prefix, owner, cost_center, SSH key
+cp terraform.tfvars.example terraform.tfvars   # set org_prefix, owner, cost_center, SSH key, identity_subscription_id
 ```
 
 ```bash
@@ -84,9 +96,11 @@ terraform apply tfplan
 
 Uncomment the `backend "azurerm"` block in `providers.tf` to keep state remotely. To tear down, set `enable_resource_locks = false` and apply before running `terraform destroy`.
 
+After the first apply, promote the domain controllers and cut DNS over by following **[docs/identity.md](docs/identity.md)**.
+
 ### Testing
 
-`terraform test` plans against a mocked provider (no credentials needed) and asserts the WAF guardrails: addressing, zones, NSG coverage, private subnets, Trusted Launch, flow logs, diagnostics, tags, budget and naming. CI (`.github/workflows/terraform.yml`) runs `fmt`, `validate`, `test`, `tflint` and `checkov` on every PR.
+`terraform test` plans against a mocked provider (no credentials needed) and asserts the WAF and tier-0 guardrails: addressing, zones, NSG coverage, private subnets, Trusted Launch, flow logs, diagnostics, tags, budget, naming, identity region/zone redundancy, separate subscription, NTDS disk caching, backup policy and tombstone-safe retention. CI (`.github/workflows/terraform.yml`) runs `fmt`, `validate`, `test`, `tflint` and `checkov` on every PR.
 
 ```bash
 terraform test
@@ -99,7 +113,14 @@ terraform test
 | `org_prefix` | — | **Required.** 2–15 lowercase chars. |
 | `owner`, `cost_center` | — | **Required.** Mandatory tags. |
 | `nva_admin_ssh_public_key` | — | **Required.** |
-| `subscription_id` | `null` | Falls back to `ARM_SUBSCRIPTION_ID`. |
+| `subscription_id` | `null` | Connectivity subscription. Falls back to `ARM_SUBSCRIPTION_ID`. |
+| `identity_subscription_id` | — | **Required.** Dedicated tier-0 subscription. |
+| `identity_regions` | neu `10.145.4.0/24` + weu `10.146.4.0/24`, zones 1–2 | ≥ 2 regions, ≥ 2 zones each. |
+| `dc_size` / `dc_image_sku` | `Standard_D2s_v5` / `2025-datacenter-azure-edition` | |
+| `identity_backup_storage_mode` | `ZoneRedundant` | `GeoRedundant` adds Cross Region Restore. |
+| `identity_dns_servers` | `[]` | Set to `identity_dc_ips` after promotion. |
+| `identity_allow_hub_bastion` / `identity_admin_source_cidrs` | `true` / `[]` | Who may RDP to DCs. |
+| `identity_key_vault_allowed_ips` | `[]` | Restrict the tier-0 Key Vault firewall. |
 | `environment` | `prod` | Used in names and tags. |
 | `location` | `northeurope` | Must support Availability Zones. |
 | `zones` | `["1","2","3"]` | Zone-redundant ILB, Bastion, public IPs. |
@@ -131,6 +152,9 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `bastion.tf` | Azure Bastion |
 | `monitoring.tf` | Diagnostics, flow logs, DCR, action group, alerts |
 | `cost.tf` | Budget |
+| `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
+| `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
 | `outputs.tf` | Outputs |
 | `tests/` | `terraform test` guardrails |
 | `docs/well-architected.md` | WAF pillar mapping, trade-offs, gaps |
+| `docs/identity.md` | Tier-0 identity design, backup, promotion and restore runbook |

@@ -6,13 +6,12 @@
 locals {
   diagnostic_targets = merge(
     {
-      bastion      = { id = azurerm_bastion_host.bastion.id, logs = true, metrics = true }
-      pip_bastion  = { id = azurerm_public_ip.bastion.id, logs = true, metrics = true }
-      ilb          = { id = azurerm_lb.nva_internal.id, logs = false, metrics = true }
-      nsg_nva      = { id = azurerm_network_security_group.nva.id, logs = true, metrics = false }
-      nsg_mgmt     = { id = azurerm_network_security_group.mgmt.id, logs = true, metrics = false }
-      nsg_bastion  = { id = azurerm_network_security_group.bastion.id, logs = true, metrics = false }
-      nsg_identity = { id = azurerm_network_security_group.id_dc.id, logs = true, metrics = false }
+      bastion     = { id = azurerm_bastion_host.bastion.id, logs = true, metrics = true }
+      pip_bastion = { id = azurerm_public_ip.bastion.id, logs = true, metrics = true }
+      ilb         = { id = azurerm_lb.nva_internal.id, logs = false, metrics = true }
+      nsg_nva     = { id = azurerm_network_security_group.nva.id, logs = true, metrics = false }
+      nsg_mgmt    = { id = azurerm_network_security_group.mgmt.id, logs = true, metrics = false }
+      nsg_bastion = { id = azurerm_network_security_group.bastion.id, logs = true, metrics = false }
     },
     { for k, v in azurerm_network_security_group.spoke : "nsg_${k}" => { id = v.id, logs = true, metrics = false } },
     { for k, id in local.all_vnet_ids : "vnet_${k}" => { id = id, logs = true, metrics = true } },
