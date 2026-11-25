@@ -1,6 +1,6 @@
 # Landing Zone Designer
 
-![Landing Zone Designer](../docs/images/designer.png)
+![Landing Zone Designer: settings on the left, framework scores and the live architecture on the right](../docs/images/designer-overview.png)
 
 A simple front end for this landing zone. Users pick options from dropdowns, switches and presets. As they do, the designer:
 
@@ -47,6 +47,56 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 8. **Export**: write `terraform.tfvars` (and `landingzone.json`) to the repo, or download them, plus the draw.io diagram and the compliance report. Then run `terraform init` and `terraform plan`.
 
 The header shows a score per framework and a **Ready to export** state once there are no input issues and no unmet required controls. *What needs attention* jumps to the tab to fix.
+
+## Screenshots
+
+### Start: what needs attention
+
+A new design shows what's missing. Each item links to the tab where it's fixed, and export stays blocked until the list is empty.
+
+![What needs attention: missing owner, cost centre, subscription IDs and SSH key](../docs/images/designer-attention.png)
+
+### Basics and network
+
+Organisation, region and subscriptions on the left. One base `/16` plans every address space automatically, including the hub subnets and the ILB next hop, on the right.
+
+<p>
+  <img src="../docs/images/designer-basics.png" width="49%" alt="Basics tab: org prefix, environment, owner, cost centre, region and subscriptions">
+  <img src="../docs/images/designer-network.png" width="49%" alt="Network tab: automatic address plan from one /16 and the derived address table">
+</p>
+
+### Resilience and identity
+
+Pick a resilience level instead of individual zones. Identity regions can be added or removed, and each one shows its address space and DC IPs.
+
+<p>
+  <img src="../docs/images/designer-resilience.png" width="49%" alt="Resilience tab: Standard / High / Maximum presets and fine-tuning">
+  <img src="../docs/images/designer-identity.png" width="49%" alt="Identity tab: three identity regions with DC zones, DC size and image">
+</p>
+
+### Security and operations
+
+Settings an enabled framework requires are applied and locked. The 🔒 note shows which framework and article require it.
+
+<p>
+  <img src="../docs/images/designer-security.png" width="49%" alt="Security tab: NVA SSH key, Bastion SKU, encryption at host, DDoS plan">
+  <img src="../docs/images/designer-operations.png" width="49%" alt="Operations tab: log retention and flow logs locked by NIS2 and DORA">
+</p>
+
+### Compliance and export
+
+Switch NIS2 and DORA on to see every control with its WAF / NIS2 / DORA references. Export writes `terraform.tfvars` with a live preview, plus the diagram, compliance report and project file.
+
+<p>
+  <img src="../docs/images/designer-compliance.png" width="49%" alt="Compliance tab: framework switches and controls mapped to WAF, NIS2 and DORA">
+  <img src="../docs/images/designer-export.png" width="49%" alt="Export tab: write terraform.tfvars, downloads and tfvars preview">
+</p>
+
+### Live architecture, full size
+
+The diagram follows every choice: here, the High preset with three NVAs and three DCs per region. *Download draw.io* saves an editable copy.
+
+![Full-size live architecture diagram with NIS2 and DORA badges](../docs/images/designer-diagram.png)
 
 ## How the guardrails work
 

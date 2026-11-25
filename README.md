@@ -64,7 +64,9 @@ pip install -r gui/requirements.txt
 python gui/app.py
 ```
 
-See [gui/README.md](gui/README.md).
+[![Landing Zone Designer](docs/images/designer-overview.png)](gui/README.md#screenshots)
+
+See [gui/README.md](gui/README.md) for a screen-by-screen walkthrough.
 
 ## Usage
 
