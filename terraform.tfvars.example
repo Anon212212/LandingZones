@@ -12,6 +12,18 @@ identity_subscription_id = "11111111-1111-1111-1111-111111111111" # dedicated ti
 # alert_email_addresses = ["platform-oncall@contoso.com"]
 # monthly_budget_amount = 1500
 
+# --- Spokes ---------------------------------------------------------------
+# spokes = {
+#   shared = { address_space = "10.145.1.0/24", subnet_name = "snet-shared-app" }
+#   prod = {
+#     address_space = "10.145.2.0/24"
+#     nsg_rules = [
+#       { name = "Allow-HTTPS-From-Hub", priority = 300, source_address_prefixes = ["10.145.0.0/24"], destination_port_ranges = ["443"] },
+#     ]
+#   }
+#   avd = { address_space = "10.145.3.0/24" }
+# }
+
 # --- Identity (tier-0) -----------------------------------------------------
 # identity_regions = {
 #   primary   = { location = "northeurope", address_space = "10.145.4.0/24", dc_zones = ["1", "2"] }

@@ -8,7 +8,7 @@ Two subscriptions:
 
 | Subscription | Contents |
 |---|---|
-| Connectivity | Hub, workload spokes (shared, prod, avd), HA NVAs, Bastion, NAT Gateway, platform monitoring |
+| Connectivity | Hub, workload spokes (configurable, default shared / prod / avd), HA NVAs, Bastion, NAT Gateway, platform monitoring |
 | Identity (tier-0) | Domain controllers in two regions × two zones, a Recovery Services vault per region, tier-0 Key Vault and Log Analytics |
 
 ---
@@ -41,7 +41,7 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 
 | Area | Resources |
 |---|---|
-| Connectivity | Hub + 4 spokes, peerings, route tables, NAT Gateway |
+| Connectivity | Hub + any number of workload spokes (`spokes` map, each with its own NSG rules), peerings, route tables, NAT Gateway |
 | NVA | 2+ Ubuntu 24.04 VMs (one per zone, Trusted Launch, accelerated networking, platform patching), HA Ports ILB, cloud-init router/SNAT config |
 | Access | Azure Bastion (zone-redundant) |
 | Security | NSGs on every subnet + NVA NICs, optional DDoS plan, optional encryption at host |
@@ -54,7 +54,13 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 
 ## Landing Zone Designer (GUI)
 
-Prefer not to edit variables by hand? `gui/` contains a Python front end. Choose options from dropdowns and presets, watch the architecture diagram update live, switch on **NIS2** / **DORA** to enforce their baseline on top of WAF, and export `terraform.tfvars`, an editable draw.io diagram and a compliance report.
+Prefer not to edit variables by hand? `gui/` contains a Python front end. It lets you:
+
+- choose options from dropdowns and presets, and add spokes with their own NSG rules, while the architecture diagram updates live;
+- switch on **NIS2** / **DORA** to enforce their baseline on top of WAF;
+- see an **estimated monthly cost**;
+- optionally **sign in to Azure** to pick subscriptions and run **pre-flight checks** against your tenant;
+- export `terraform.tfvars`, an editable draw.io diagram, a compliance report and the pipeline bootstrap command.
 
 ```bash
 pip install -r gui/requirements.txt
@@ -92,9 +98,34 @@ terraform plan -out tfplan
 terraform apply tfplan
 ```
 
-Uncomment the `backend "azurerm"` block in `providers.tf` to keep state remotely. To tear down, set `enable_resource_locks = false` and apply before running `terraform destroy`.
+For remote state and an approval-gated pipeline, see [Deployment pipeline](#deployment-pipeline). To tear down, set `enable_resource_locks = false` and apply before running `terraform destroy`.
 
 After the first apply, promote the domain controllers and cut DNS over by following **[docs/identity.md](docs/identity.md)**.
+
+## Deployment pipeline
+
+`.github/workflows/deploy.yml` deploys with GitHub Actions and **OIDC, so there are no stored secrets**, using two identities for separation of duties:
+
+| Trigger | Identity | Rights | What runs |
+|---|---|---|---|
+| Pull request | `<prefix>-plan` | Reader on both subscriptions, state read/lock | `terraform plan -refresh=false` → job summary + 90-day artifact |
+| Merge to `main` | `<prefix>-apply` | Contributor + User Access Administrator on both | waits for **required reviewers** on the GitHub environment, then full plan → apply |
+
+PR plans skip refresh, so the read-only identity never reads tier-0 Key Vault secrets. The plan text of every run is kept as evidence of the change (DORA Art. 9(4)(e)).
+
+To set it up:
+
+1. **Bootstrap once** as an admin. This creates the state storage account (ZRS, Entra ID auth only, versioning, soft delete, delete lock) and both identities with their federated credentials. The designer's Export tab fills in this command for you. Add `--dry-run` to preview it.
+
+   ```bash
+   ./scripts/bootstrap.sh --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --github-repo OWNER/REPO --environment production
+   ```
+
+2. **Set the repository variables** the script prints (Settings → Secrets and variables → Actions → *Variables*), and add required reviewers to the `production` environment.
+
+3. **Commit `environments/production.tfvars`** (Designer → Export → *Write environments/production.tfvars*) in a pull request.
+
+The workflow stays inactive until the variables exist. `.terraform.lock.hcl` pins the provider versions with hashes for Linux, macOS and Windows.
 
 ### Testing
 
@@ -109,6 +140,7 @@ terraform test
 | Variable | Default | Notes |
 |---|---|---|
 | `org_prefix` | — | **Required.** 2–15 lowercase chars. |
+| `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
 | `owner`, `cost_center` | — | **Required.** Mandatory tags. |
 | `nva_admin_ssh_public_key` | — | **Required.** |
 | `subscription_id` | `null` | Connectivity subscription. Falls back to `ARM_SUBSCRIPTION_ID`. |
@@ -152,6 +184,9 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `cost.tf` | Budget |
 | `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
 | `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
+| `scripts/bootstrap.sh` | One-off: state storage + OIDC plan/apply identities for the pipeline |
+| `environments/` | Committed per-environment tfvars used by the deploy workflow |
+| `.github/workflows/deploy.yml` | Plan on PR, approval-gated apply on main |
 | `outputs.tf` | Outputs |
 | `tests/` | `terraform test` guardrails |
 | `docs/well-architected.md` | WAF pillar mapping, trade-offs, gaps |

@@ -85,20 +85,11 @@ locals {
   # generated from this map.
   #############################################
   spokes = {
-    shared = {
-      address_space = var.spoke_address_space
-      subnet_name   = "snet-shared-app"
-      subnet_prefix = var.spoke_address_space
-    }
-    prod = {
-      address_space = var.prod_address_space
-      subnet_name   = "snet-prod-app"
-      subnet_prefix = var.prod_address_space
-    }
-    avd = {
-      address_space = var.avd_address_space
-      subnet_name   = "snet-avd-sessionhosts"
-      subnet_prefix = var.avd_address_space
+    for k, v in var.spokes : k => {
+      address_space = v.address_space
+      subnet_name   = coalesce(v.subnet_name, "snet-${k}")
+      subnet_prefix = v.address_space
+      nsg_rules     = v.nsg_rules
     }
   }
 

@@ -1,0 +1,134 @@
+name: deploy
+
+# Plan on pull requests (read-only identity), apply on main after approval
+# (protected GitHub environment + apply identity). Both sign in to Azure with
+# OIDC – no secrets. Inactive until the repository variables from
+# scripts/bootstrap.sh are set.
+
+on:
+  pull_request:
+    paths-ignore: ["docs/**", "**/*.md", "gui/**"]
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md", "gui/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-state-${{ vars.TF_ENVIRONMENT || 'production' }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  ARM_USE_OIDC: "true"
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.CONNECTIVITY_SUBSCRIPTION_ID }}
+  VAR_FILE: environments/${{ vars.TF_ENVIRONMENT || 'production' }}.tfvars
+
+jobs:
+  plan:
+    name: plan (pull request)
+    if: github.event_name == 'pull_request' && vars.AZURE_PLAN_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Configure remote state
+        run: printf 'terraform {\n  backend "azurerm" {}\n}\n' > backend.tf
+
+      - name: terraform init
+        run: >
+          terraform init -lockfile=readonly
+          -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}"
+          -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          -backend-config="container_name=tfstate"
+          -backend-config="key=landingzone-${{ vars.TF_ENVIRONMENT || 'production' }}.tfstate"
+          -backend-config="subscription_id=${{ vars.TFSTATE_SUBSCRIPTION_ID || vars.CONNECTIVITY_SUBSCRIPTION_ID }}"
+          -backend-config="use_azuread_auth=true"
+          -backend-config="use_oidc=true"
+
+      # -refresh=false: the read-only identity never reads tier-0 Key Vault
+      # secrets. The apply job re-plans with a full refresh before applying.
+      - name: terraform plan
+        run: terraform plan -refresh=false -lock-timeout=5m -var-file="$VAR_FILE" -out=tfplan -no-color
+
+      - name: Plan summary
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "### Terraform plan – \`$VAR_FILE\`"
+            echo '```'
+            grep -E '^(Plan:|No changes)' plan.txt || true
+            echo '```'
+            echo '<details><summary>Full plan</summary>'
+            echo
+            echo '```'
+            head -c 60000 plan.txt
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan-pr-${{ github.event.pull_request.number }}
+          path: plan.txt
+          retention-days: 90
+
+  apply:
+    name: apply (main, approved)
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.AZURE_APPLY_CLIENT_ID != ''
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment (Settings → Environments).
+    environment: ${{ vars.TF_ENVIRONMENT || 'production' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_APPLY_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Configure remote state
+        run: printf 'terraform {\n  backend "azurerm" {}\n}\n' > backend.tf
+
+      - name: terraform init
+        run: >
+          terraform init -lockfile=readonly
+          -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}"
+          -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}"
+          -backend-config="container_name=tfstate"
+          -backend-config="key=landingzone-${{ vars.TF_ENVIRONMENT || 'production' }}.tfstate"
+          -backend-config="subscription_id=${{ vars.TFSTATE_SUBSCRIPTION_ID || vars.CONNECTIVITY_SUBSCRIPTION_ID }}"
+          -backend-config="use_azuread_auth=true"
+          -backend-config="use_oidc=true"
+
+      - name: terraform plan
+        run: terraform plan -lock-timeout=5m -var-file="$VAR_FILE" -out=tfplan -no-color
+
+      - name: Record plan
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          { echo "### Applying – \`$VAR_FILE\`"; echo '```'; grep -E '^(Plan:|No changes)' plan.txt || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apply-plan-${{ github.sha }}
+          path: plan.txt
+          retention-days: 90
+
+      - name: terraform apply
+        run: terraform apply -lock-timeout=5m -no-color tfplan

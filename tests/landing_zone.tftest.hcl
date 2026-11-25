@@ -109,7 +109,7 @@ run "security_controls" {
   }
 
   assert {
-    condition     = length(azurerm_subnet_network_security_group_association.spoke) == 3
+    condition     = length(azurerm_subnet_network_security_group_association.spoke) == length(var.spokes)
     error_message = "Every workload spoke subnet needs an NSG (identity has its own)."
   }
 
@@ -143,7 +143,7 @@ run "operational_excellence_controls" {
   command = plan
 
   assert {
-    condition     = length(azurerm_network_watcher_flow_log.vnet) == 4 && alltrue([for m in module.identity : length(m.dc_ips) > 0])
+    condition     = length(azurerm_network_watcher_flow_log.vnet) == 1 + length(var.spokes) && alltrue([for m in module.identity : length(m.dc_ips) > 0])
     error_message = "Hub and all three workload spokes need VNet flow logs."
   }
 
@@ -270,4 +270,37 @@ run "rejects_single_region_identity" {
   }
 
   expect_failures = [var.identity_regions]
+}
+
+run "custom_spokes_and_rules" {
+  command = plan
+
+  variables {
+    spokes = {
+      web  = { address_space = "10.145.1.0/24", nsg_rules = [{ name = "Allow-HTTPS-From-Hub", priority = 300, source_address_prefixes = ["10.145.0.0/24"], destination_port_ranges = ["443"] }] }
+      data = { address_space = "10.145.2.0/24" }
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_virtual_network.spoke) == 2 && azurerm_subnet.spoke["data"].name == "snet-data"
+    error_message = "Spokes must follow var.spokes (default subnet name snet-<key>)."
+  }
+
+  assert {
+    condition     = length([for r in azurerm_network_security_group.spoke["web"].security_rule : r if r.name == "Allow-HTTPS-From-Hub"]) == 1
+    error_message = "Custom NSG rules must be added to the spoke NSG."
+  }
+}
+
+run "rejects_internet_inbound_spoke_rule" {
+  command = plan
+
+  variables {
+    spokes = {
+      web = { address_space = "10.145.1.0/24", nsg_rules = [{ name = "Bad", priority = 300, source_address_prefixes = ["0.0.0.0/0"], destination_port_ranges = ["443"] }] }
+    }
+  }
+
+  expect_failures = [var.spokes]
 }

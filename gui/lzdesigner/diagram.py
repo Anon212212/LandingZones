@@ -101,7 +101,11 @@ def build(cfg: LandingZoneConfig) -> Model:
     k = len(cfg.identity_regions)
     region_h = [144 + 88 * max(len(r.dc_zones), 1) for r in cfg.identity_regions]
     id_bottom = 355 + sum(region_h) + 30 * max(k - 1, 0) + 15
-    conn_bottom = 1040
+    per_row = 4 if len(cfg.spokes) > 3 else 3
+    spoke_rows = max(1, math.ceil(len(cfg.spokes) / per_row))
+    mgmt_y = 610 + spoke_rows * 210
+    dy = mgmt_y - 820                       # shift of everything below the spokes
+    conn_bottom = 1040 + dy
     body_bottom = max(conn_bottom, id_bottom)
     m = Model(height=body_bottom + 70)
     m.badges = list(cfg.frameworks)
@@ -159,33 +163,44 @@ def build(cfg: LandingZoneConfig) -> Model:
     m.node("hub_note", 60, 498, 920, 34, "note", [" · ".join(notes)], parent="hub")
 
     ilb = cfg.ilb_ip() or "ILB"
-    spokes = [("shared", "Shared services", cfg.spoke_address_space, "snet-shared-app", 40),
-              ("prod", "Production", cfg.prod_address_space, "snet-prod-app", 365),
-              ("avd", "Azure Virtual Desktop", cfg.avd_address_space, "snet-avd-sessionhosts", 690)]
-    for key, name, cidr, sn, x in spokes:
-        m.node(f"vnet_{key}", x, 610, 290, 175, "container", [name, f"vnet-{cfg.org_prefix}-{key} · {cidr}"],
+    spoke_boxes = []
+    for idx, sp in enumerate(cfg.spokes):
+        row, col = divmod(idx, per_row)
+        in_row = min(per_row, len(cfg.spokes) - row * per_row)
+        w = (960 - 15 * (per_row - 1)) / per_row
+        x = 40 + col * (w + 15)
+        y = 610 + row * 210
+        name = sp.description or sp.key.capitalize()
+        rules = len(sp.nsg_rules)
+        m.node(f"vnet_{sp.key}", x, y, w, 175, "container", [name, f"vnet-{cfg.org_prefix}-{sp.key} · {sp.address_space}"],
                parent="sub_conn", stroke=C["green"], fill="#FFFFFF")
-        m.node(f"sn_{key}", x + 15, 660, 260, 70, "res", [sn, f"{cidr} · NSG baseline"], parent=f"vnet_{key}", stroke=C["grey"])
-        m.node(f"udr_{key}", x + 15, 742, 260, 30, "note", [f"UDR  0.0.0.0/0 → ILB {ilb}"], parent=f"vnet_{key}")
+        m.node(f"sn_{sp.key}", x + 15, y + 50, w - 30, 70, "res",
+               [sp.effective_subnet_name, f"{sp.address_space} · NSG baseline" + (f" + {rules} rule{'s' if rules != 1 else ''}" if rules else "")],
+               parent=f"vnet_{sp.key}", stroke=C["grey"])
+        m.node(f"udr_{sp.key}", x + 15, y + 132, w - 30, 30, "note",
+               [f"UDR 0.0.0.0/0 → {ilb}" if row == 0 else f"UDR 0.0.0.0/0 → {ilb} · peered to hub"], parent=f"vnet_{sp.key}")
+        spoke_boxes.append((sp.key, x, w, row))
+    if not cfg.spokes:
+        m.node("no_spokes", 40, 640, 960, 40, "note", ["No workload spokes – add them on the Network tab"], parent="sub_conn")
 
-    m.node("mgmt_rg", 40, 820, 960, 200, "container", ["Platform management", f"rg-{cfg.org_prefix}-management-{cfg.environment}"],
+    m.node("mgmt_rg", 40, 820 + dy, 960, 200, "container", ["Platform management", f"rg-{cfg.org_prefix}-management-{cfg.environment}"],
            parent="sub_conn", stroke=C["grey"], fill="#FFFFFF")
-    m.node("law", 60, 872, 215, 78, "res", ["Log Analytics", f"{cfg.log_retention_days}-day retention · Entra-only",
+    m.node("law", 60, 872 + dy, 215, 78, "res", ["Log Analytics", f"{cfg.log_retention_days}-day retention · Entra-only",
                                              "diagnostics from all resources"], parent="mgmt_rg", stroke=C["blue"])
     if cfg.enable_flow_logs:
-        m.node("flow", 295, 872, 215, 78, "res", ["VNet flow logs", "Traffic Analytics",
+        m.node("flow", 295, 872 + dy, 215, 78, "res", ["VNet flow logs", "Traffic Analytics",
                                                    f"{cfg.flow_log_retention_days}-day raw retention"], parent="mgmt_rg", stroke=C["blue"])
     else:
-        m.node("flow", 295, 872, 215, 78, "res", ["VNet flow logs", "disabled", ""], parent="mgmt_rg", stroke=C["off"])
+        m.node("flow", 295, 872 + dy, 215, 78, "res", ["VNet flow logs", "disabled", ""], parent="mgmt_rg", stroke=C["off"])
     recips = len(cfg.alert_email_addresses)
-    m.node("alerts", 530, 872, 215, 78, "res",
+    m.node("alerts", 530, 872 + dy, 215, 78, "res",
            ["Alerts → action group", f"{recips} recipient{'s' if recips != 1 else ''}" if recips else "portal only (no recipients)",
             "ILB · NVA · NAT · Service Health"], parent="mgmt_rg", stroke=C["blue"] if recips else C["off"])
-    m.node("budget", 765, 872, 215, 78, "res",
+    m.node("budget", 765, 872 + dy, 215, 78, "res",
            ["Budget + mandatory tags",
             f"{cfg.monthly_budget_amount:,.0f} / month" if cfg.monthly_budget_amount > 0 else "no budget set",
             f"owner: {cfg.owner or '—'}"], parent="mgmt_rg", stroke=C["blue"])
-    m.node("mgmt_note", 60, 965, 920, 34, "note",
+    m.node("mgmt_note", 60, 965 + dy, 920, 34, "note",
            ["Azure Monitor Agent + DCR on NVAs · CI: fmt / validate / test / tflint / checkov"], parent="mgmt_rg")
 
     # ---------------------------------------------------------- identity
@@ -248,15 +263,23 @@ def build(cfg: LandingZoneConfig) -> Model:
         m.edge("e_inet_nat", "internet", "nat", [(470, 114), (470, 132), (255, 132), (255, 280)], "egress (SNAT)", "traffic")
     m.edge("e_inet_bas", "internet", "bastion", [(620, 86), (990, 86), (990, 441), (960, 441)], "HTTPS 443 · admins", "traffic")
     m.edge("e_ilb_nva", "ilb", "nva1", [(285, 441), (320, 441)], "", "traffic")
-    for key, _, _, _, x in spokes:
-        cx = x + 145
-        m.edge(f"e_peer_{key}", "hub", f"vnet_{key}", [(cx, 545), (cx, 610)], "peering", "peering")
+    for key, x, w, row in spoke_boxes:
+        if row == 0:  # later rows are labelled "peered to hub" to keep the drawing clean
+            cx = round(x + w / 2)
+            m.edge(f"e_peer_{key}", "hub", f"vnet_{key}", [(cx, 545), (cx, 610)], "peering", "peering")
 
     m.node("legend", 20, body_bottom + 18, 1620, 40, "legend", [])
     return m
 
 
 # ====================================================================== SVG
+def _fit(text: str, width: float, size: float = 11, bold: bool = False) -> str:
+    """Trim text with an ellipsis so it fits roughly within `width` pixels."""
+    per_char = size * (0.62 if bold else 0.56)
+    max_chars = max(4, int(width / per_char))
+    return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
+
+
 def _t(x, y, s, size=11, weight="normal", color=C["muted"], anchor="middle", italic=False):
     st = ' font-style="italic"' if italic else ""
     return (f'<text x="{x:.1f}" y="{y:.1f}" font-family="{FONT}" font-size="{size}" font-weight="{weight}" '
@@ -274,9 +297,9 @@ def _svg_node(n: Node) -> str:
     elif k == "container":
         dash = ' stroke-dasharray="6 4"' if n.dashed else ""
         out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="8" fill="{n.fill}" stroke="{n.stroke}" stroke-width="{n.sw}"{dash}/>')
-        out.append(_t(x + 12, y + 20, n.lines[0], 13, "600", n.stroke, "start"))
+        out.append(_t(x + 12, y + 20, _fit(n.lines[0], w - 24, 13, True), 13, "600", n.stroke, "start"))
         if len(n.lines) > 1:
-            out.append(_t(x + 12, y + 35, n.lines[1], 11, "normal", C["muted"], "start"))
+            out.append(_t(x + 12, y + 35, _fit(n.lines[1], w - 24), 11, "normal", C["muted"], "start"))
     elif k == "subnet":
         out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="5" fill="{C["grey_bg"]}" stroke="{C["grey"]}" stroke-width="1" stroke-dasharray="4 3"/>')
         out.append(_t(x + 10, y + 17, n.lines[0], 11, "600", C["muted"], "start"))
@@ -288,6 +311,7 @@ def _svg_node(n: Node) -> str:
         top = y + h / 2 - (len(n.lines) - 1) * lh / 2 + 4
         for i, line in enumerate(n.lines):
             if line:
+                line = _fit(line, w - 14, 12 if i == 0 else 11, i == 0)
                 out.append(_t(x + w / 2 + 2, top + i * lh, line, 12 if i == 0 else 11, "600" if i == 0 else "normal",
                               (C["muted"] if off else C["text"]) if i == 0 else C["muted"]))
     elif k == "note":

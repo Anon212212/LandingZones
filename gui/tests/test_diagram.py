@@ -32,3 +32,13 @@ def test_badges_show_frameworks(cfg):
     cfg.frameworks = ["WAF", "DORA"]
     svg = diagram.render_svg(cfg)
     assert "✓ DORA" in svg and "✓ NIS2" not in svg
+
+
+def test_diagram_grows_with_spokes(cfg):
+    base = diagram.build(cfg).height
+    for i in range(3):
+        cfg.add_spoke(f"app{i}")
+    m = diagram.build(cfg)
+    assert sum(1 for n in m.nodes if n.id.startswith("vnet_")) == 6
+    assert sum(1 for e in m.edges if e.id.startswith("e_peer_")) == 4      # first row of four
+    assert m.height >= base

@@ -17,6 +17,8 @@ GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
 PREFIX = re.compile(r"^[a-z][a-z0-9-]{1,14}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 SSH_KEY = re.compile(r"^(ssh-(rsa|ed25519)|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]+={0,3}( .*)?$")
+PORTS = re.compile(r"^(\*|\d{1,5}(-\d{1,5})?)$")
+SERVICE_TAGS = {"VirtualNetwork", "AzureLoadBalancer", "Internet", "*", "Any"}
 RESERVED_USERS = {"administrator", "admin", "user", "guest", "root"}
 
 
@@ -100,6 +102,38 @@ def validate(cfg: LandingZoneConfig) -> list[Issue]:
         elif _cidr(c).prefixlen == 0:
             add("nva_mgmt_source_cidrs", "SSH must never be open to 0.0.0.0/0.", "Security")
 
+    # Spokes
+    keys = [sp.key for sp in cfg.spokes]
+    if len(set(keys)) != len(keys):
+        add("spokes", "Spoke names must be unique.", "Network")
+    for sp in cfg.spokes:
+        if not re.match(r"^[a-z][a-z0-9]{1,15}$", sp.key or ""):
+            add("spokes", f"Spoke '{sp.key}': 2–16 lowercase letters/digits, starting with a letter.", "Network")
+        seen = set()
+        for r in sp.nsg_rules:
+            where = f"Spoke '{sp.key}' rule '{r.name}'"
+            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$", r.name or ""):
+                add("spokes", f"{where}: name must be letters, digits, '-', '_' or '.'.", "Network")
+            if not 300 <= int(r.priority or 0) <= 3900:
+                add("spokes", f"{where}: priority must be 300–3900 (baseline rules use the rest).", "Network")
+            if (r.direction, r.priority) in seen:
+                add("spokes", f"{where}: duplicate priority {r.priority}.", "Network")
+            seen.add((r.direction, r.priority))
+            if r.direction not in ("Inbound", "Outbound") or r.access not in ("Allow", "Deny") \
+                    or r.protocol not in ("Tcp", "Udp", "Icmp", "*"):
+                add("spokes", f"{where}: invalid direction, access or protocol.", "Network")
+            if not r.source_address_prefixes or not r.destination_port_ranges:
+                add("spokes", f"{where}: needs at least one source and one port.", "Network")
+            for src in r.source_address_prefixes:
+                if src not in SERVICE_TAGS and _cidr(src) is None:
+                    add("spokes", f"{where}: '{src}' is not a CIDR or allowed service tag.", "Network")
+            for port in r.destination_port_ranges:
+                if not PORTS.match(port):
+                    add("spokes", f"{where}: '{port}' is not a port, range or '*'.", "Network")
+            if r.direction == "Inbound" and r.access == "Allow" and any(
+                    x in ("*", "0.0.0.0/0", "Internet", "Any") for x in r.source_address_prefixes):
+                add("spokes", f"{where}: inbound from the Internet is not allowed.", "Network")
+
     # Resilience
     if len(set(cfg.nva_zones)) < 2:
         add("nva_zones", "At least two NVAs in distinct zones are required.", "Resilience")
@@ -140,5 +174,13 @@ def validate(cfg: LandingZoneConfig) -> list[Issue]:
         add("monthly_budget_amount", "A budget needs at least one alert email.", "Operations")
     if not 1 <= cfg.nva_cpu_alert_threshold <= 100:
         add("nva_cpu_alert_threshold", "CPU threshold must be 1–100 %.", "Operations")
+
+    # Pipeline (optional – only validated when filled in)
+    if cfg.github_repo and not re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", cfg.github_repo):
+        add("github_repo", "GitHub repository must be OWNER/REPO.", "Export")
+    if not re.match(r"^[A-Za-z0-9_.-]{1,64}$", cfg.github_environment or ""):
+        add("github_environment", "GitHub environment: letters, digits, '-', '_' or '.'.", "Export")
+    if cfg.state_storage_account and not re.match(r"^[a-z0-9]{3,24}$", cfg.state_storage_account):
+        add("state_storage_account", "State storage account: 3–24 lowercase letters and digits.", "Export")
 
     return issues

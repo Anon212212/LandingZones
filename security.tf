@@ -267,8 +267,9 @@ resource "azurerm_subnet_network_security_group_association" "hub_bastion" {
 }
 
 #############################################
-# Workload spoke NSGs (shared, prod, avd) – baseline: VNet + Bastion in,
-# everything else denied. Add workload rules per spoke as needed.
+# Workload spoke NSGs – baseline: Bastion + VNet in, AzureLoadBalancer,
+# everything else denied. Per-spoke rules from var.spokes[*].nsg_rules
+# (priorities 300-3900) slot in between.
 #############################################
 
 resource "azurerm_network_security_group" "spoke" {
@@ -301,6 +302,21 @@ resource "azurerm_network_security_group" "spoke" {
     destination_port_range     = "*"
     source_address_prefix      = "VirtualNetwork"
     destination_address_prefix = "*"
+  }
+
+  dynamic "security_rule" {
+    for_each = each.value.nsg_rules
+    content {
+      name                       = security_rule.value.name
+      priority                   = security_rule.value.priority
+      direction                  = security_rule.value.direction
+      access                     = security_rule.value.access
+      protocol                   = security_rule.value.protocol
+      source_port_range          = "*"
+      destination_port_ranges    = security_rule.value.destination_port_ranges
+      source_address_prefixes    = security_rule.value.source_address_prefixes
+      destination_address_prefix = "*"
+    }
   }
 
   # Default AllowAzureLoadBalancerInBound sits below Deny-All, so restate it.

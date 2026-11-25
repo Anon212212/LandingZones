@@ -29,3 +29,13 @@ def test_render_shapes(cfg):
 def test_strings_are_escaped(cfg):
     cfg.owner = 'team "blue"'
     assert 'owner       = "team \\"blue\\""' in tfvars.render(cfg)
+
+
+def test_spokes_render_with_rules(cfg):
+    from lzdesigner.model import NsgRule
+    cfg.spokes[0].nsg_rules = [NsgRule("Allow-HTTPS", 300, ["10.145.0.0/24"], ["443"])]
+    values = tfvars.tfvars_values(cfg)["spokes"]
+    assert values["shared"]["nsg_rules"][0]["priority"] == 300
+    assert "nsg_rules" not in values["prod"]
+    text = tfvars.render(cfg)
+    assert '"Allow-HTTPS"' in text and "spokes = {" in text

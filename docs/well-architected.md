@@ -67,6 +67,7 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | Raw flow-log retention capped | ✅ | `var.flow_log_retention_days` |
 | Right-sized current-gen NVA (`D2s_v5`), StandardSSD OS disk for a stateless appliance | ✅ | `variables.tf`, `nva.tf` |
 | Optional cost levers: NAT Gateway, Bastion SKU, DDoS, NVA count | ✅ | `variables.tf` |
+| Cost estimate while designing (bundled baseline or live Azure Retail Prices) | ✅ | `gui/lzdesigner/pricing.py` |
 | Azure Hybrid Benefit for DCs | ⚙️ | `var.dc_hybrid_benefit` |
 | Reservations / savings plan for the NVA and DC VMs | ⛔ | Purchase decision. Always-on VMs are a good candidate. |
 
@@ -84,8 +85,10 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | Guest telemetry (syslog auth + system, CPU/memory/network/disk) through Azure Monitor Agent + DCR | ✅ | `monitoring.tf`, `nva.tf` |
 | Common-schema action group for all alerts | ✅ | `monitoring.tf` |
 | Remote state with Entra ID auth | ⚙️ | `providers.tf` (uncomment the backend) |
-| Commit `.terraform.lock.hcl` for all platforms (`terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=windows_amd64`) | ⚙️ | Run once where the registry is reachable. |
-| Plan/apply pipeline with OIDC and environment approvals | ⛔ | Add when a deployment identity exists. |
+| `.terraform.lock.hcl` committed with hashes for Linux, macOS (Intel and ARM) and Windows | ✅ | repo root |
+| Plan/apply pipeline with OIDC (no secrets), a read-only plan identity, an approval-gated apply identity, and plan artifacts kept 90 days | ✅ | `.github/workflows/deploy.yml`, `scripts/bootstrap.sh` |
+| Remote state: ZRS, Entra ID-only, versioning, soft delete, delete lock | ✅ | `scripts/bootstrap.sh` |
+| Designer pre-flight checks against the tenant (overlap, quota, zones, Network Watcher, EncryptionAtHost, permissions) | ✅ | `gui/lzdesigner/azure.py` |
 
 ## 5. Performance Efficiency
 
