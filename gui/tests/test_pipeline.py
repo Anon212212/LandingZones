@@ -14,7 +14,9 @@ def test_bootstrap_dry_run_matches_designer_command(cfg):
     assert "--allow-shared-key-access false" in trace and "--sku Standard_ZRS" in trace
     assert "repo:contoso/landingzones:pull_request" in trace
     assert "repo:contoso/landingzones:environment:production" in trace
-    assert trace.count("Reader") == 2 and trace.count("User\\ Access\\ Administrator") == 2
+    # connectivity, identity, shared services and production
+    assert trace.count("Reader") == 4 and trace.count("User\\ Access\\ Administrator") == 4
+    assert "/subscriptions/55555555-5555-5555-5555-555555555555" in trace
     assert "AZURE_APPLY_CLIENT_ID" in proc.stdout
 
 

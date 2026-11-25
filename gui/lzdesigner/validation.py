@@ -81,6 +81,28 @@ def validate(cfg: LandingZoneConfig) -> list[Issue]:
     if not valid_ssh_public_key(cfg.nva_admin_ssh_public_key):
         add("nva_admin_ssh_public_key", "Paste an OpenSSH public key (ssh-ed25519 / ssh-rsa …).", "Security")
 
+    # Landing-zone subscriptions for spokes
+    from .model import SPOKE_SUBSCRIPTIONS
+    labels = {"subscription_id": "Connectivity", "identity_subscription_id": "Identity",
+              "shared_services_subscription_id": "Shared services", "production_subscription_id": "Production"}
+    for target in cfg.used_spoke_subscriptions():
+        fld = "shared_services_subscription_id" if target == "shared" else "production_subscription_id"
+        if not GUID.match(getattr(cfg, fld) or ""):
+            users = ", ".join(s.key for s in cfg.spokes if s.subscription == target)
+            add(fld, f"{labels[fld]} subscription ID must be a GUID (used by spoke {users}).", "Basics")
+    for sp in cfg.spokes:
+        if sp.subscription not in SPOKE_SUBSCRIPTIONS:
+            add("spokes", f"Spoke '{sp.key}': choose connectivity, shared services or production.", "Network")
+    chosen = {f: getattr(cfg, f).lower() for f in labels if GUID.match(getattr(cfg, f) or "")
+              and (f in ("subscription_id", "identity_subscription_id")
+                   or (f == "shared_services_subscription_id" and "shared" in cfg.used_spoke_subscriptions())
+                   or (f == "production_subscription_id" and "prod" in cfg.used_spoke_subscriptions()))}
+    seen: dict[str, str] = {}
+    for f, sid in chosen.items():
+        if sid in seen and f != "identity_subscription_id":
+            add(f, f"{labels[f]} and {labels[seen[sid]]} must be different subscriptions.", "Basics")
+        seen.setdefault(sid, f)
+
     # Network
     named = cfg.all_address_spaces()
     nets: dict[str, ipaddress.IPv4Network] = {}

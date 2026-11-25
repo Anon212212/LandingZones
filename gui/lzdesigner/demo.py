@@ -18,6 +18,8 @@ class DemoTenant:
         return [
             {"subscriptionId": CONN, "displayName": "sub-connectivity-prod", "state": "Enabled"},
             {"subscriptionId": IDENT, "displayName": "sub-identity-prod", "state": "Enabled"},
+            {"subscriptionId": "44444444-4444-4444-4444-444444444444", "displayName": "sub-shared-services-prod", "state": "Enabled"},
+            {"subscriptionId": "55555555-5555-5555-5555-555555555555", "displayName": "sub-production-workloads", "state": "Enabled"},
             {"subscriptionId": "22222222-2222-2222-2222-222222222222", "displayName": "sub-sandbox", "state": "Enabled"},
         ]
 

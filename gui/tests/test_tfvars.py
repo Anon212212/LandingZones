@@ -20,7 +20,7 @@ def test_every_terraform_variable_is_covered(cfg):
 
 def test_render_shapes(cfg):
     text = tfvars.render(cfg)
-    assert 'identity_subscription_id = "11111111-1111-1111-1111-111111111111"' in text
+    assert re.search(r'identity_subscription_id\s+= "11111111-1111-1111-1111-111111111111"', text)
     assert 'primary   = {' in text or 'primary = {' in text
     assert 'dc_zones      = ["1", "2"]' in text
     assert "ddos_protection_plan_id" not in text   # empty → omitted (null)
@@ -39,3 +39,13 @@ def test_spokes_render_with_rules(cfg):
     assert "nsg_rules" not in values["prod"]
     text = tfvars.render(cfg)
     assert '"Allow-HTTPS"' in text and "spokes = {" in text
+
+
+def test_spoke_subscriptions_render(cfg):
+    v = tfvars.tfvars_values(cfg)
+    assert v["spokes"]["shared"]["subscription"] == "shared" and v["spokes"]["avd"]["subscription"] == "connectivity"
+    assert v["production_subscription_id"] == "55555555-5555-5555-5555-555555555555"
+    for sp in cfg.spokes:
+        sp.subscription = "connectivity"
+    cfg.shared_services_subscription_id = ""
+    assert "shared_services_subscription_id = " not in tfvars.render(cfg)

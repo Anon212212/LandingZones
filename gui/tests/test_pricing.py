@@ -9,7 +9,7 @@ def test_baseline_estimate_has_expected_lines(cfg):
     cats = est.by_category()
     assert {"Compute", "Networking", "Monitoring", "Backup", "Storage"} <= set(cats)
     assert est.total > est.fixed > 0
-    assert est.source == "baseline" and est.currency == "USD"
+    assert est.source == "baseline" and est.currency == "EUR"
 
 
 def test_choices_move_the_estimate(cfg):
@@ -60,3 +60,7 @@ def test_live_refresh_uses_retail_api(cfg):
     assert all("currencyCode=EUR" in u and "prices.azure.com" in u for u in calls)
     est = pricing.estimate(cfg, book)
     assert est.source == "live" and est.currency == "EUR"
+
+
+def test_default_currency_is_euro():
+    assert pricing.PriceBook().currency == "EUR" and pricing.BASELINE_CURRENCY == "EUR"

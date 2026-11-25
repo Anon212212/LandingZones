@@ -15,6 +15,13 @@ from .catalog import REGIONS, RESILIENCE_PRESETS
 
 FRAMEWORKS = ("WAF", "NIS2", "DORA")
 
+# Where a spoke can live: Terraform's spokes[*].subscription values.
+SPOKE_SUBSCRIPTIONS = {
+    "connectivity": "Connectivity",
+    "shared": "Shared services",
+    "prod": "Production",
+}
+
 
 @dataclass
 class NsgRule:
@@ -34,6 +41,7 @@ class Spoke:
     subnet_name: str = ""
     nsg_rules: list[NsgRule] = field(default_factory=list)
     description: str = ""          # designer only – shown in the diagram
+    subscription: str = "connectivity"   # connectivity | shared | prod
 
     @property
     def effective_subnet_name(self) -> str:
@@ -42,8 +50,8 @@ class Spoke:
 
 def default_spokes() -> list[Spoke]:
     return [
-        Spoke("shared", "10.145.1.0/24", "snet-shared-app", description="Shared services"),
-        Spoke("prod", "10.145.2.0/24", "snet-prod-app", description="Production"),
+        Spoke("shared", "10.145.1.0/24", "snet-shared-app", description="Shared services", subscription="shared"),
+        Spoke("prod", "10.145.2.0/24", "snet-prod-app", description="Production", subscription="prod"),
         Spoke("avd", "10.145.3.0/24", "snet-avd-sessionhosts", description="Azure Virtual Desktop"),
     ]
 
@@ -69,6 +77,8 @@ class LandingZoneConfig:
     # --- subscriptions / access -----------------------------------------
     subscription_id: str = ""
     identity_subscription_id: str = ""
+    shared_services_subscription_id: str = ""
+    production_subscription_id: str = ""
     nva_admin_username: str = "nvaadmin"
     nva_admin_ssh_public_key: str = ""
 
@@ -272,6 +282,13 @@ class LandingZoneConfig:
         base = ipaddress.IPv4Network(sn).network_address
         return [str(base + 4 + i) for i in range(len(region.dc_zones))]
 
+    def subscription_for(self, target: str) -> str:
+        return {"connectivity": self.subscription_id, "shared": self.shared_services_subscription_id,
+                "prod": self.production_subscription_id}.get(target, "")
+
+    def used_spoke_subscriptions(self) -> list[str]:
+        return [t for t in SPOKE_SUBSCRIPTIONS if t != "connectivity" and any(s.subscription == t for s in self.spokes)]
+
     # ------------------------------------------------------------------ pipeline
     def state_names(self) -> tuple[str, str]:
         import hashlib
@@ -286,6 +303,8 @@ class LandingZoneConfig:
         return (f"./scripts/bootstrap.sh \\\n  --location {self.location} \\\n  --state-rg {rg} \\\n"
                 f"  --state-account {sa} \\\n  --connectivity-sub {self.subscription_id or '<connectivity-sub>'} \\\n"
                 f"  --identity-sub {self.identity_subscription_id or '<identity-sub>'} \\\n"
+                + "".join(f"  --landing-zone-sub {self.subscription_for(t) or '<' + t + '-sub>'} \\\n"
+                          for t in self.used_spoke_subscriptions()) +
                 f"  --github-repo {self.github_repo or '<owner/repo>'} \\\n  --environment {self.github_environment} \\\n"
                 f"  --name-prefix {self.org_prefix}-lz-{self.environment}")
 

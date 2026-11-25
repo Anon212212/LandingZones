@@ -64,3 +64,19 @@ def test_spoke_names(cfg):
     cfg.spokes[0].key = "Prod-1"
     cfg.spokes[1].key = "avd"
     assert "spokes" in fields(validate(cfg))
+
+
+def test_landing_zone_subscriptions_required_and_distinct(cfg):
+    cfg.production_subscription_id = ""
+    assert "production_subscription_id" in fields(validate(cfg))
+    cfg.production_subscription_id = cfg.subscription_id
+    assert any("must be different" in i.message for i in validate(cfg))
+    cfg.production_subscription_id = cfg.shared_services_subscription_id
+    assert any("must be different" in i.message for i in validate(cfg))
+
+
+def test_unused_landing_zone_subscription_is_optional(cfg):
+    for sp in cfg.spokes:
+        sp.subscription = "connectivity"
+    cfg.shared_services_subscription_id = cfg.production_subscription_id = ""
+    assert validate(cfg) == []

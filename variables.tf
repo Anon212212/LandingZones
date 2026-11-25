@@ -69,15 +69,65 @@ variable "hub_address_space" {
   }
 }
 
+variable "shared_services_subscription_id" {
+  description = "[Security] Landing-zone subscription for shared-services spokes (subscription = \"shared\"). Required when any spoke uses it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.shared_services_subscription_id == null || can(regex("^[0-9a-fA-F-]{36}$", var.shared_services_subscription_id))
+    error_message = "shared_services_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.shared_services_subscription_id != null || !anytrue([for s in values(var.spokes) : s.subscription == "shared"])
+    error_message = "A spoke uses subscription = \"shared\" – set shared_services_subscription_id."
+  }
+
+  validation {
+    condition = var.shared_services_subscription_id == null || !contains(
+      [for x in [var.subscription_id, var.identity_subscription_id, var.production_subscription_id] : lower(x) if x != null],
+    lower(coalesce(var.shared_services_subscription_id, "-")))
+    error_message = "The shared-services subscription must be its own subscription (not connectivity, identity or production)."
+  }
+}
+
+variable "production_subscription_id" {
+  description = "[Security] Landing-zone subscription for production spokes (subscription = \"prod\"). Required when any spoke uses it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.production_subscription_id == null || can(regex("^[0-9a-fA-F-]{36}$", var.production_subscription_id))
+    error_message = "production_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.production_subscription_id != null || !anytrue([for s in values(var.spokes) : s.subscription == "prod"])
+    error_message = "A spoke uses subscription = \"prod\" – set production_subscription_id."
+  }
+
+  validation {
+    condition = var.production_subscription_id == null || !contains(
+      [for x in [var.subscription_id, var.identity_subscription_id] : lower(x) if x != null],
+    lower(coalesce(var.production_subscription_id, "-")))
+    error_message = "The production subscription must be its own subscription (not connectivity or identity)."
+  }
+}
+
 variable "spokes" {
   description = <<-EOT
     Workload spokes, keyed by a short name used in resource names. Each spoke
-    gets its own VNet (one subnet spanning it), NSG, route table to the NVAs
-    and hub peering. nsg_rules are added to the baseline NSG (Bastion + VNet
-    in, AzureLoadBalancer, deny-all) and must use priorities 300-3900.
+    gets its own resource group, VNet (one subnet spanning it), NSG, route
+    table to the NVAs and hub peering, in the subscription named by
+    `subscription`: "connectivity", "shared" (shared_services_subscription_id)
+    or "prod" (production_subscription_id). nsg_rules are added to the
+    baseline NSG (Bastion + VNet in, AzureLoadBalancer, deny-all) and must use
+    priorities 300-3900.
   EOT
   type = map(object({
     address_space = string
+    subscription  = optional(string, "connectivity")
     subnet_name   = optional(string)
     nsg_rules = optional(list(object({
       name                    = string
@@ -90,9 +140,14 @@ variable "spokes" {
     })), [])
   }))
   default = {
-    shared = { address_space = "10.145.1.0/24", subnet_name = "snet-shared-app" }
-    prod   = { address_space = "10.145.2.0/24", subnet_name = "snet-prod-app" }
-    avd    = { address_space = "10.145.3.0/24", subnet_name = "snet-avd-sessionhosts" }
+    shared = { address_space = "10.145.1.0/24", subscription = "shared", subnet_name = "snet-shared-app" }
+    prod   = { address_space = "10.145.2.0/24", subscription = "prod", subnet_name = "snet-prod-app" }
+    avd    = { address_space = "10.145.3.0/24", subscription = "connectivity", subnet_name = "snet-avd-sessionhosts" }
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.spokes) : contains(["connectivity", "shared", "prod"], s.subscription)])
+    error_message = "Spoke subscription must be connectivity, shared or prod."
   }
 
   validation {

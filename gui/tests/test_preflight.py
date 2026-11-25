@@ -2,6 +2,8 @@ from lzdesigner import azure
 
 CONN = "00000000-0000-0000-0000-000000000000"
 IDENT = "11111111-1111-1111-1111-111111111111"
+SHARED = "44444444-4444-4444-4444-444444444444"
+PROD = "55555555-5555-5555-5555-555555555555"
 OWNER = "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
 CONTRIB = "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
 
@@ -19,7 +21,7 @@ def sku(name, family, vcpus, zones, restricted_zones=()):
 class FakeTenant:
     def __init__(self, **kw):
         self.vnet_map = kw.get("vnets", {})
-        self.roles = kw.get("roles", {CONN: [OWNER], IDENT: [OWNER]})
+        self.roles = kw.get("roles", {CONN: [OWNER], IDENT: [OWNER], SHARED: [OWNER], PROD: [OWNER]})
         self.features = kw.get("features", "Registered")
         self.restricted = kw.get("restricted", {})
         self.quota_free = kw.get("quota_free", 100)
@@ -30,7 +32,9 @@ class FakeTenant:
 
     def subscriptions(self):
         return [{"subscriptionId": CONN, "displayName": "Connectivity", "state": "Enabled"},
-                {"subscriptionId": IDENT, "displayName": "Identity", "state": "Enabled"}]
+                {"subscriptionId": IDENT, "displayName": "Identity", "state": "Enabled"},
+                {"subscriptionId": SHARED, "displayName": "Shared services", "state": "Enabled"},
+                {"subscriptionId": PROD, "displayName": "Production", "state": "Enabled"}]
 
     def role_assignments(self, sub, principal_id):
         return [{"properties": {"scope": f"/subscriptions/{sub}", "roleDefinitionId": f"/subscriptions/{sub}{r}"}}
@@ -81,7 +85,7 @@ def test_detects_overlap_but_ignores_our_own_vnets(cfg):
 
 
 def test_contributor_alone_cannot_deploy(cfg):
-    bad = failing(azure.run_preflight(cfg, FakeTenant(roles={CONN: [OWNER], IDENT: [CONTRIB]})))
+    bad = failing(azure.run_preflight(cfg, FakeTenant(roles={CONN: [OWNER], IDENT: [CONTRIB], SHARED: [OWNER], PROD: [OWNER]})))
     assert [c.id for c in bad] == ["RBAC-identity"]
 
 
@@ -131,3 +135,13 @@ def test_token_claims_decoding():
                 expires_on = 9999999999
             return T()
     assert azure.ArmClient(Cred()).principal() == {"object_id": "abc", "tenant_id": "t1", "name": "a@b.c"}
+
+
+def test_landing_zone_subscriptions_are_checked(cfg):
+    tenant = FakeTenant(vnets={PROD: [("vnet-old-prod", "10.145.2.0/24")]},
+                        roles={CONN: [OWNER], IDENT: [OWNER], SHARED: [OWNER], PROD: []})
+    checks = azure.run_preflight(cfg, tenant)
+    ids = {c.id for c in checks}
+    assert {"SUB-Shared services", "SUB-Production", "RBAC-shared services", "RBAC-production"} <= ids
+    assert next(c for c in checks if c.id == "NET-OVERLAP").status == azure.FAIL
+    assert next(c for c in checks if c.id == "RBAC-production").status == azure.WARN

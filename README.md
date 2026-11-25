@@ -4,12 +4,16 @@ Terraform for an Azure **hub & spoke** network with a **highly available NVA pai
 
 ➡️ **[Well-Architected alignment, pillar by pillar](docs/well-architected.md)** · **[Identity (tier-0) design & runbook](docs/identity.md)**
 
-Two subscriptions:
+Four subscriptions, following the Azure landing zone pattern:
 
 | Subscription | Contents |
 |---|---|
-| Connectivity | Hub, workload spokes (configurable, default shared / prod / avd), HA NVAs, Bastion, NAT Gateway, platform monitoring |
+| Connectivity | Hub, HA NVAs, Bastion, NAT Gateway, platform monitoring, and any spokes you keep there (AVD by default) |
 | Identity (tier-0) | Domain controllers in two regions × two zones, a Recovery Services vault per region, tier-0 Key Vault and Log Analytics |
+| Shared services (landing zone) | The `shared` spoke: its own resource group, VNet, NSG and route table, peered to the hub |
+| Production (landing zone) | The `prod` spoke, as above |
+
+Each spoke's `subscription` (`connectivity`, `shared` or `prod`) decides where it's deployed.
 
 ---
 
@@ -31,9 +35,9 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 | | | `snet-nva-internal` | `.32/27` | nva |
 | | | `snet-mgmt` | `.64/27` | mgmt |
 | | | `AzureBastionSubnet` | `.96/27` | bastion (Microsoft rule set) |
-| shared | `10.145.1.0/24` | `snet-shared-app` | `/24` | spoke baseline |
-| prod | `10.145.2.0/24` | `snet-prod-app` | `/24` | spoke baseline |
-| avd | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
+| shared (shared-services sub) | `10.145.1.0/24` | `snet-shared-app` | `/24` | spoke baseline |
+| prod (production sub) | `10.145.2.0/24` | `snet-prod-app` | `/24` | spoke baseline |
+| avd (connectivity sub) | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
 | identity (primary, identity sub) | `10.145.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 | identity (secondary, identity sub) | `10.146.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 
@@ -41,7 +45,8 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 
 | Area | Resources |
 |---|---|
-| Connectivity | Hub + any number of workload spokes (`spokes` map, each with its own NSG rules), peerings, route tables, NAT Gateway |
+| Connectivity | Hub, peerings, NAT Gateway |
+| Workload spokes | Any number (`spokes` map), each in its chosen subscription (`modules/spoke`): resource group, VNet, NSG with its own rules, route table to the NVAs, flow logs, diagnostics |
 | NVA | 2+ Ubuntu 24.04 VMs (one per zone, Trusted Launch, accelerated networking, platform patching), HA Ports ILB, cloud-init router/SNAT config |
 | Access | Azure Bastion (zone-redundant) |
 | Security | NSGs on every subnet + NVA NICs, optional DDoS plan, optional encryption at host |
@@ -58,7 +63,7 @@ Prefer not to edit variables by hand? `gui/` contains a Python front end. It let
 
 - choose options from dropdowns and presets, and add spokes with their own NSG rules, while the architecture diagram updates live;
 - switch on **NIS2** / **DORA** to enforce their baseline on top of WAF;
-- see an **estimated monthly cost**;
+- see an **estimated monthly cost** in euro;
 - optionally **sign in to Azure** to pick subscriptions and run **pre-flight checks** against your tenant;
 - export `terraform.tfvars`, an editable draw.io diagram, a compliance report and the pipeline bootstrap command.
 
@@ -76,7 +81,7 @@ See [gui/README.md](gui/README.md) for a screen-by-screen walkthrough.
 
 ## Usage
 
-Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and two subscriptions in the same tenant (connectivity and identity). The deploying identity needs Owner (or Contributor + User Access Administrator) on both, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
+Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and four subscriptions in the same tenant: connectivity, identity, shared services and production. The deploying identity needs Owner (or Contributor + User Access Administrator) on all of them, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars   # set org_prefix, owner, cost_center, SSH key, identity_subscription_id
@@ -108,8 +113,8 @@ After the first apply, promote the domain controllers and cut DNS over by follow
 
 | Trigger | Identity | Rights | What runs |
 |---|---|---|---|
-| Pull request | `<prefix>-plan` | Reader on both subscriptions, state read/lock | `terraform plan -refresh=false` → job summary + 90-day artifact |
-| Merge to `main` | `<prefix>-apply` | Contributor + User Access Administrator on both | waits for **required reviewers** on the GitHub environment, then full plan → apply |
+| Pull request | `<prefix>-plan` | Reader on every subscription, state read/lock | `terraform plan -refresh=false` → job summary + 90-day artifact |
+| Merge to `main` | `<prefix>-apply` | Contributor + User Access Administrator on every subscription | waits for **required reviewers** on the GitHub environment, then full plan → apply |
 
 PR plans skip refresh, so the read-only identity never reads tier-0 Key Vault secrets. The plan text of every run is kept as evidence of the change (DORA Art. 9(4)(e)).
 
@@ -118,7 +123,7 @@ To set it up:
 1. **Bootstrap once** as an admin. This creates the state storage account (ZRS, Entra ID auth only, versioning, soft delete, delete lock) and both identities with their federated credentials. The designer's Export tab fills in this command for you. Add `--dry-run` to preview it.
 
    ```bash
-   ./scripts/bootstrap.sh --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --github-repo OWNER/REPO --environment production
+   ./scripts/bootstrap.sh --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --landing-zone-sub <shared-guid> --landing-zone-sub <prod-guid> --github-repo OWNER/REPO --environment production
    ```
 
 2. **Set the repository variables** the script prints (Settings → Secrets and variables → Actions → *Variables*), and add required reviewers to the `production` environment.
@@ -140,7 +145,8 @@ terraform test
 | Variable | Default | Notes |
 |---|---|---|
 | `org_prefix` | — | **Required.** 2–15 lowercase chars. |
-| `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
+| `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, `subscription` (`connectivity` / `shared` / `prod`), optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
+| `shared_services_subscription_id` / `production_subscription_id` | — | **Required** when a spoke targets them. Must differ from each other, connectivity and identity. |
 | `owner`, `cost_center` | — | **Required.** Mandatory tags. |
 | `nva_admin_ssh_public_key` | — | **Required.** |
 | `subscription_id` | `null` | Connectivity subscription. Falls back to `ARM_SUBSCRIPTION_ID`. |
@@ -184,6 +190,7 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `cost.tf` | Budget |
 | `identity.tf` | Tier-0 shared services, identity modules, peerings, DC alerts |
 | `modules/identity-region/` | Per-region identity: VNet, NSG, DCs, NTDS disks, Recovery Services vault, flow logs |
+| `modules/spoke/` | One workload spoke in its landing-zone subscription: RG, VNet, NSG, route table, peering, flow logs, diagnostics |
 | `scripts/bootstrap.sh` | One-off: state storage + OIDC plan/apply identities for the pipeline |
 | `environments/` | Committed per-environment tfvars used by the deploy workflow |
 | `.github/workflows/deploy.yml` | Plan on PR, approval-gated apply on main |

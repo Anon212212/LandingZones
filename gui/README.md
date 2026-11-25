@@ -9,7 +9,7 @@ A simple front end for this landing zone. Users pick options from dropdowns, swi
 - **enforces the compliance baseline** for the frameworks you switch on (WAF always, plus NIS2 and DORA), locking the settings they require,
 - **writes `terraform.tfvars`** for the Terraform in the repo root, and exports the diagram (editable draw.io), a compliance report and a re-openable project file,
 - **lets you add workload spokes** with their own NSG rules,
-- **estimates the monthly cost** as you choose (bundled baseline, or live prices from the Azure Retail Prices API),
+- **estimates the monthly cost in euro** as you choose (bundled EUR baseline, or live prices from the Azure Retail Prices API),
 - **signs in to Azure (optional)** to pick subscriptions and run **pre-flight checks** against your tenant,
 - **prepares the deployment pipeline**: the bootstrap command and `environments/<env>.tfvars` for the approval-gated GitHub Actions workflow.
 
@@ -47,8 +47,8 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 
 ## Workflow
 
-1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, both subscription IDs.
-2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, and give each one NSG rules. Choose NAT Gateway egress.
+1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, and the four subscriptions: connectivity, identity, shared services and production.
+2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, choose each spoke's **subscription** (connectivity, shared services or production), and give each one NSG rules. Choose NAT Gateway egress.
 3. **Resilience**: Standard / High / Maximum, or fine-tune zones, NVA size and delete locks.
 4. **Identity**: identity regions and DC zones, DC size and image, backup redundancy, tier-0 access and Key Vault firewall.
 5. **Security**: NVA SSH key, Bastion SKU, encryption at host, DDoS plan.
@@ -58,9 +58,9 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 
 Alongside the diagram:
 
-- **Estimated monthly cost** breaks the total down by category and separates fixed from usage-based charges. Expand it for the line items and the usage assumptions. Pick USD, EUR or GBP and press ⟳ to load live VM prices from `prices.azure.com`. Offline, it shows the bundled USD baseline.
+- **Estimated monthly cost** breaks the total down by category and separates fixed from usage-based charges. Expand it for the line items and the usage assumptions. It shows euro by default. Press ⟳ to load live VM prices from `prices.azure.com` (EUR, or switch to USD or GBP). Offline, it shows the bundled EUR baseline.
 - **Pre-flight checks** (after *Sign in to Azure*) use your Azure CLI session, a browser sign-in or a device code. Only Reader-level calls are made, and the designer stores no tokens. The checks are:
-  - the subscriptions exist and are enabled,
+  - all four subscriptions exist and are enabled,
   - you hold deploy permissions (Owner, or Contributor + User Access Administrator),
   - no **overlap with existing VNets**,
   - a Network Watcher exists per region,

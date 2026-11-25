@@ -41,7 +41,8 @@ def _key(k: str) -> str:
 
 SECTIONS: list[tuple[str, list[str]]] = [
     ("Organisation", ["org_prefix", "environment", "location", "owner", "cost_center", "tags"]),
-    ("Subscriptions", ["subscription_id", "identity_subscription_id"]),
+    ("Subscriptions", ["subscription_id", "identity_subscription_id", "shared_services_subscription_id",
+                       "production_subscription_id"]),
     ("Network", ["hub_address_space", "enable_nat_gateway", "nva_mgmt_source_cidrs"]),
     ("Spokes", ["spokes"]),
     ("Resilience", ["zones", "nva_zones", "enable_resource_locks"]),
@@ -69,7 +70,7 @@ def tfvars_values(cfg: LandingZoneConfig) -> dict:
             if n == "spokes":
                 v = {}
                 for sp in cfg.spokes:
-                    item = {"address_space": sp.address_space}
+                    item = {"address_space": sp.address_space, "subscription": sp.subscription}
                     if sp.subnet_name:
                         item["subnet_name"] = sp.subnet_name
                     if sp.nsg_rules:
@@ -78,7 +79,7 @@ def tfvars_values(cfg: LandingZoneConfig) -> dict:
                             "protocol": r.protocol, "source_address_prefixes": r.source_address_prefixes,
                             "destination_port_ranges": r.destination_port_ranges} for r in sp.nsg_rules]
                     v[sp.key] = item
-            if n == "ddos_protection_plan_id" and not v:
+            if n in ("ddos_protection_plan_id", "shared_services_subscription_id", "production_subscription_id") and not v:
                 v = None
             values[n] = v
     return values

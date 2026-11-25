@@ -22,10 +22,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lzdesigner import azure, compliance, diagram, pricing, tfvars  # noqa: E402
 from lzdesigner.catalog import (BACKUP_MODES, BASTION_SKUS, DC_IMAGES, ENVIRONMENTS,  # noqa: E402
                                 REGIONS, RESILIENCE_PRESETS, VM_SIZES)
-from lzdesigner.model import LandingZoneConfig  # noqa: E402
+from lzdesigner.model import SPOKE_SUBSCRIPTIONS, LandingZoneConfig  # noqa: E402
 from lzdesigner.validation import validate  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SUBSCRIPTION_FIELDS = [
+    ("subscription_id", "Connectivity subscription"),
+    ("identity_subscription_id", "Identity (tier-0) subscription"),
+    ("shared_services_subscription_id", "Shared services subscription"),
+    ("production_subscription_id", "Production subscription"),
+]
 ZONES = ["1", "2", "3"]
 REGION_OPTIONS = {k: f"{r.display}  ·  {k}" for k, r in REGIONS.items()}
 STATUS_ICON = {
@@ -235,6 +241,9 @@ class Designer:
                     ui.button(icon="delete", on_click=lambda k=sp.key: (c.remove_spoke(k), self.spokes_view.refresh(),
                                                                         self.changed())).props("flat dense round") \
                         .tooltip("Remove spoke")
+                ui.select(SPOKE_SUBSCRIPTIONS, label="Subscription").bind_value(sp, "subscription") \
+                    .on_value_change(lambda: (self.subscription_fields.refresh(), self.changed())) \
+                    .props("outlined dense").classes("w-full")
                 with ui.row().classes("w-full no-wrap items-center"):
                     if c.auto_addressing:
                         ui.label(f"{sp.address_space} · {sp.effective_subnet_name}").classes("lz-hint grow")
@@ -449,7 +458,7 @@ class Designer:
                                                                                forward=lambda v: v if v is not None else -1) \
                 .on_value_change(self.changed).props("outlined dense").classes("grow")
         self.section("Cost")
-        ui.number("Monthly budget (0 = none)", min=0, step=100).bind_value(c, "monthly_budget_amount",
+        ui.number("Monthly budget in € (0 = none)", min=0, step=100).bind_value(c, "monthly_budget_amount",
                                                                            forward=lambda v: v or 0) \
             .on_value_change(self.changed).props("outlined dense").classes("w-full")
         self.section("Scaling signal")
@@ -464,19 +473,21 @@ class Designer:
         if self.subscriptions:
             opts = {s["subscriptionId"]: f"{s['displayName']}  ·  {s['subscriptionId']}" for s in self.subscriptions
                     if s.get("state") == "Enabled"}
-            for fld, label in (("subscription_id", "Connectivity subscription"),
-                               ("identity_subscription_id", "Identity (tier-0) subscription")):
+            for fld, label in SUBSCRIPTION_FIELDS:
                 value = getattr(c, fld) if getattr(c, fld) in opts else None
                 ui.select(opts, label=label, value=value, with_input=True,
                           on_change=lambda e, f=fld: (setattr(c, f, e.value or ""), self.changed())) \
                     .props("outlined dense").classes("w-full")
             ui.label(f"{len(opts)} subscriptions in tenant {self.account.get('tenant_id', '')}.").classes("lz-hint")
         else:
-            ui.input("Connectivity subscription ID", placeholder="00000000-0000-0000-0000-000000000000") \
-                .bind_value(c, "subscription_id").on_value_change(self.changed).props("outlined dense").classes("w-full")
-            ui.input("Identity (tier-0) subscription ID", placeholder="must differ from connectivity") \
-                .bind_value(c, "identity_subscription_id").on_value_change(self.changed).props("outlined dense").classes("w-full")
+            for fld, label in SUBSCRIPTION_FIELDS:
+                ui.input(f"{label} ID", placeholder="00000000-0000-0000-0000-000000000000") \
+                    .bind_value(c, fld).on_value_change(self.changed).props("outlined dense").classes("w-full")
             ui.label("Sign in to Azure (top right) to pick subscriptions from your tenant.").classes("lz-hint")
+        used = {t: ", ".join(sp.key for sp in c.spokes if sp.subscription == t) for t in ("shared", "prod")}
+        ui.label("Landing-zone subscriptions host workload spokes: "
+                 f"shared services → {used['shared'] or 'no spokes yet'}; production → {used['prod'] or 'no spokes yet'}. "
+                 "Choose each spoke's subscription on the Network tab.").classes("lz-hint")
 
     @ui.refreshable
     def account_view(self) -> None:
@@ -613,7 +624,7 @@ class Designer:
         with ui.row().classes("w-full items-center"):
             ui.label("Estimated monthly cost").classes("lz-section").style("margin:0")
             ui.space()
-            ui.select(["USD", "EUR", "GBP"], value=self.price_book.currency,
+            ui.select(["EUR", "USD", "GBP"], value=self.price_book.currency,
                       on_change=lambda e: self.refresh_prices(e.value)).props("dense borderless").classes("w-20")
             ui.button(icon="sync", on_click=lambda: self.refresh_prices(self.price_book.currency)) \
                 .props("flat dense round").tooltip("Refresh live prices from the Azure Retail Prices API")
@@ -644,8 +655,8 @@ class Designer:
             self.price_book = await run.io_bound(pricing.refresh_live_prices, self.cfg, currency)
             ui.notify(f"Live {currency} prices loaded", type="positive")
         except Exception as e:  # noqa: BLE001 – offline or blocked: keep the baseline
-            self.price_book = pricing.PriceBook(currency="USD")
-            ui.notify(f"Couldn't reach prices.azure.com ({e.__class__.__name__}) – showing bundled USD baseline.",
+            self.price_book = pricing.PriceBook()
+            ui.notify(f"Couldn't reach prices.azure.com ({e.__class__.__name__}) – showing the bundled EUR baseline.",
                       type="warning")
         self.cost_view.refresh()
 

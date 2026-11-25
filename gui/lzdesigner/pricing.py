@@ -2,7 +2,7 @@
 
 Two sources:
 
-* BASELINE – bundled approximate pay-as-you-go list prices (USD, typical
+* BASELINE – bundled approximate pay-as-you-go list prices (EUR, typical
   European region). Good enough to compare options; not a quote.
 * live     – `refresh_live_prices()` queries the public Azure Retail Prices
   API (https://prices.azure.com, no sign-in) for the VM sizes and regions
@@ -23,35 +23,37 @@ from .model import LandingZoneConfig
 
 HOURS = 730
 
-BASELINE_NOTE = ("Approximate pay-as-you-go list prices in USD for a typical European region, bundled with the "
-                 "designer. Use 'Refresh live prices' for current VM prices in your regions and currency.")
+BASELINE_CURRENCY = "EUR"
+BASELINE_NOTE = ("Approximate pay-as-you-go list prices in EUR for a typical European region, bundled with the "
+                 "designer. Use 'Refresh live prices' for current VM prices in your regions.")
 
-# Hourly VM rates (Linux = compute only; Windows includes the licence).
+# Hourly VM rates in EUR (Linux = compute only; Windows includes the licence).
 BASELINE_VM_HOURLY = {
-    "Standard_D2s_v5": {"linux": 0.107, "windows": 0.199},
-    "Standard_D4s_v5": {"linux": 0.214, "windows": 0.398},
-    "Standard_D8s_v5": {"linux": 0.428, "windows": 0.796},
+    "Standard_D2s_v5": {"linux": 0.099, "windows": 0.185},
+    "Standard_D4s_v5": {"linux": 0.198, "windows": 0.370},
+    "Standard_D8s_v5": {"linux": 0.396, "windows": 0.740},
 }
 
+# EUR
 BASELINE = {
-    "bastion_hourly": {"Basic": 0.19, "Standard": 0.29, "Premium": 0.45},
-    "nat_gateway_hourly": 0.045,
-    "nat_gateway_per_gb": 0.045,
-    "public_ip_hourly": 0.005,
-    "lb_first5_rules_hourly": 0.025,
-    "disk_standardssd_e4": 2.40,      # 32 GB, NVA OS disk
-    "disk_premium_p10": 19.71,        # 128 GB, DC OS disk
-    "disk_premium_per_gb": 0.135,     # NTDS data disk, approximated per GB
-    "law_per_gb": 2.76,               # Analytics logs ingestion
-    "law_retention_per_gb_month": 0.10,  # beyond the 31 included days
-    "flow_logs_per_gb": 0.50,
-    "traffic_analytics_per_gb": 2.30,
-    "backup_instance_50_500gb": 10.0,  # protected instance fee per VM
-    "backup_storage_per_gb": {"ZoneRedundant": 0.028, "GeoRedundant": 0.045},
-    "ddos_plan_month": 2944.0,
-    "key_vault_premium_month": 5.0,   # operations + HSM-backed keys, rough
-    "monitor_alerts_month": 5.0,
-    "storage_flowlogs_month": 10.0,
+    "bastion_hourly": {"Basic": 0.18, "Standard": 0.27, "Premium": 0.42},
+    "nat_gateway_hourly": 0.042,
+    "nat_gateway_per_gb": 0.042,
+    "public_ip_hourly": 0.0047,
+    "lb_first5_rules_hourly": 0.024,
+    "disk_standardssd_e4": 2.23,      # 32 GB, NVA OS disk
+    "disk_premium_p10": 18.30,        # 128 GB, DC OS disk
+    "disk_premium_per_gb": 0.126,     # NTDS data disk, approximated per GB
+    "law_per_gb": 2.57,               # Analytics logs ingestion
+    "law_retention_per_gb_month": 0.093,  # beyond the 31 included days
+    "flow_logs_per_gb": 0.47,
+    "traffic_analytics_per_gb": 2.14,
+    "backup_instance_50_500gb": 9.30,  # protected instance fee per VM
+    "backup_storage_per_gb": {"ZoneRedundant": 0.026, "GeoRedundant": 0.042},
+    "ddos_plan_month": 2738.0,
+    "key_vault_premium_month": 4.60,  # operations + HSM-backed keys, rough
+    "monitor_alerts_month": 4.60,
+    "storage_flowlogs_month": 9.30,
 }
 
 
@@ -98,10 +100,10 @@ class Estimate:
 @dataclass
 class PriceBook:
     """VM hourly rates keyed by (region, size, os). Falls back to BASELINE."""
-    currency: str = "USD"
+    currency: str = BASELINE_CURRENCY
     vm: dict[tuple[str, str, str], float] = field(default_factory=dict)
     live: bool = False
-    fx: float = 1.0  # multiplier applied to non-VM baseline items in non-USD currencies
+    fx: float = 1.0  # multiplier from the EUR baseline into another currency
 
     def vm_hourly(self, region: str, size: str, os_: str) -> float:
         if (region, size, os_) in self.vm:
@@ -221,13 +223,14 @@ def pick_vm_rate(items: list[dict], os_: str) -> float | None:
     return min(candidates) if candidates else None
 
 
-def refresh_live_prices(cfg: LandingZoneConfig, currency: str = "USD", opener=urllib.request.urlopen) -> PriceBook:
+def refresh_live_prices(cfg: LandingZoneConfig, currency: str = BASELINE_CURRENCY,
+                        opener=urllib.request.urlopen) -> PriceBook:
     """Fetch VM rates for the design's sizes/regions. Raises on network errors."""
     book = PriceBook(currency=currency, live=True)
     wanted = {(cfg.location, cfg.nva_size, "linux")}
     for r in cfg.identity_regions:
         wanted.add((r.location, cfg.dc_size, "linux" if cfg.dc_hybrid_benefit else "windows"))
-    usd_ref = None
+    ratio = None
     for region, size, os_ in sorted(wanted):
         items = _query(f"serviceName eq 'Virtual Machines' and armRegionName eq '{region}' "
                        f"and armSkuName eq '{size}' and priceType eq 'Consumption'", currency, opener)
@@ -235,8 +238,8 @@ def refresh_live_prices(cfg: LandingZoneConfig, currency: str = "USD", opener=ur
         if rate is not None:
             book.vm[(region, size, os_)] = rate
             base = BASELINE_VM_HOURLY.get(size, {}).get(os_)
-            if base and usd_ref is None:
-                usd_ref = rate / base
-    if currency != "USD" and usd_ref:
-        book.fx = usd_ref   # scale the non-VM baseline items roughly into the chosen currency
+            if base and ratio is None:
+                ratio = rate / base
+    if currency != BASELINE_CURRENCY and ratio:
+        book.fx = ratio   # scale the non-VM EUR baseline items roughly into the chosen currency
     return book

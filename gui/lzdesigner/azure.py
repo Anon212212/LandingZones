@@ -199,9 +199,12 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
 
     conn, ident = cfg.subscription_id.lower(), cfg.identity_subscription_id.lower()
     subs = {s["subscriptionId"].lower(): s for s in client.subscriptions()}
+    landing = [("Shared services" if t == "shared" else "Production", cfg.subscription_for(t).lower())
+               for t in cfg.used_spoke_subscriptions()]
 
     # 1. Subscriptions -----------------------------------------------------------
-    for label, sid, section in (("Connectivity", conn, "Basics"), ("Identity", ident, "Basics")):
+    for label, sid, section in (("Connectivity", conn, "Basics"), ("Identity", ident, "Basics"),
+                                *[(lbl, sid, "Basics") for lbl, sid in landing]):
         s = subs.get(sid)
         if not s:
             add(f"SUB-{label}", f"{label} subscription accessible", FAIL,
@@ -210,7 +213,9 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
             add(f"SUB-{label}", f"{label} subscription accessible", FAIL, f"{s['displayName']} is {s.get('state')}.", section)
         else:
             add(f"SUB-{label}", f"{label} subscription accessible", PASS, f"{s['displayName']} ({sid})", section)
-    targets = [(sid, label) for sid, label in ((conn, "connectivity"), (ident, "identity")) if sid in subs]
+    targets = [(sid, label) for sid, label in ((conn, "connectivity"), (ident, "identity"),
+                                               *[(sid, lbl.lower()) for lbl, sid in landing]) if sid in subs]
+    targets = list(dict.fromkeys(targets))
 
     # 2. Permissions -------------------------------------------------------------
     def roles():
@@ -262,6 +267,7 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
             add("NW", "Network Watchers for flow logs", INFO, "Flow logs are off.", "Operations")
             return
         need = {(conn, cfg.location)} | {(ident, r.location) for r in cfg.identity_regions}
+        need |= {(sid, cfg.location) for _, sid in landing}
         cache: dict[str, list[dict]] = {}
         for sid, loc in sorted(need):
             if sid not in subs:
@@ -284,7 +290,8 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
 
     # 5. Encryption at host --------------------------------------------------------
     def eah():
-        states = {label: client.feature_state(sid, "Microsoft.Compute", "EncryptionAtHost") for sid, label in targets}
+        vm_subs = [(sid, label) for sid, label in targets if label in ("connectivity", "identity")]
+        states = {label: client.feature_state(sid, "Microsoft.Compute", "EncryptionAtHost") for sid, label in vm_subs}
         ok = all(s == "Registered" for s in states.values())
         detail = ", ".join(f"{k}: {v}" for k, v in states.items())
         if cfg.nva_encryption_at_host and not ok:

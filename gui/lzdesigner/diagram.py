@@ -25,7 +25,13 @@ C = {
     "grey": "#8A8886", "grey_bg": "#FAFAFA",
     "text": "#201F1E", "muted": "#605E5C", "orange": "#CA5010",
     "off": "#C8C6C4",
+    "lz_shared": "#038387",
+    "lz_prod": "#B4009E",
 }
+
+SPOKE_TOP, SPOKE_ROW_H = 618, 232
+LZ_STYLE = {"shared": ("Shared services subscription", C["lz_shared"]),
+            "prod": ("Production subscription", C["lz_prod"])}
 
 EDGE_STYLE = {
     "traffic": dict(color=C["blue"], dash=None, start=False, width=1.8),
@@ -103,7 +109,7 @@ def build(cfg: LandingZoneConfig) -> Model:
     id_bottom = 355 + sum(region_h) + 30 * max(k - 1, 0) + 15
     per_row = 4 if len(cfg.spokes) > 3 else 3
     spoke_rows = max(1, math.ceil(len(cfg.spokes) / per_row))
-    mgmt_y = 610 + spoke_rows * 210
+    mgmt_y = SPOKE_TOP + spoke_rows * SPOKE_ROW_H - 18
     dy = mgmt_y - 820                       # shift of everything below the spokes
     conn_bottom = 1040 + dy
     body_bottom = max(conn_bottom, id_bottom)
@@ -163,23 +169,45 @@ def build(cfg: LandingZoneConfig) -> Model:
     m.node("hub_note", 60, 498, 920, 34, "note", [" · ".join(notes)], parent="hub")
 
     ilb = cfg.ilb_ip() or "ILB"
-    spoke_boxes = []
-    for idx, sp in enumerate(cfg.spokes):
+    # Spokes grouped by subscription so each landing zone forms one frame.
+    order = {"connectivity": 0, "shared": 1, "prod": 2}
+    ordered = sorted(cfg.spokes, key=lambda sp: order.get(sp.subscription, 9))
+    w = (960 - 15 * (per_row - 1)) / per_row
+    placed = []
+    for idx, sp in enumerate(ordered):
         row, col = divmod(idx, per_row)
-        in_row = min(per_row, len(cfg.spokes) - row * per_row)
-        w = (960 - 15 * (per_row - 1)) / per_row
-        x = 40 + col * (w + 15)
-        y = 610 + row * 210
+        placed.append((sp, 40 + col * (w + 15), SPOKE_TOP + row * SPOKE_ROW_H, row))
+    frames: dict[tuple[str, int], list] = {}
+    for sp, x, y, row in placed:
+        if sp.subscription in LZ_STYLE:
+            frames.setdefault((sp.subscription, row), []).append((sp, x, y))
+    labelled = set()
+    for (target, row), members in frames.items():
+        label, color = LZ_STYLE[target]
+        sub_id = cfg.subscription_for(target)
+        if target in labelled:
+            text = f"{label} (cont.)"
+        else:
+            text = f"{label} · {sub_id[:8]}…" if sub_id else label
+        labelled.add(target)
+        # Label sits on the bottom edge so the hub peering lines never cross it.
+        fx, fy = members[0][1] - 7, members[0][2] - 7
+        fw = members[-1][1] + w + 7 - fx
+        m.node(f"lz_{target}_{row}", fx, fy, fw, 175 + 31, "frame", [text], parent="sub_conn", stroke=color)
+    spoke_boxes = []
+    for sp, x, y, row in placed:
         name = sp.description or sp.key.capitalize()
         rules = len(sp.nsg_rules)
+        target = sp.subscription if sp.subscription in LZ_STYLE else None
+        parent = f"lz_{target}_{row}" if target else "sub_conn"
         m.node(f"vnet_{sp.key}", x, y, w, 175, "container", [name, f"vnet-{cfg.org_prefix}-{sp.key} · {sp.address_space}"],
-               parent="sub_conn", stroke=C["green"], fill="#FFFFFF")
+               parent=parent, stroke=LZ_STYLE[target][1] if target else C["green"], fill="#FFFFFF")
         m.node(f"sn_{sp.key}", x + 15, y + 50, w - 30, 70, "res",
                [sp.effective_subnet_name, f"{sp.address_space} · NSG baseline" + (f" + {rules} rule{'s' if rules != 1 else ''}" if rules else "")],
                parent=f"vnet_{sp.key}", stroke=C["grey"])
         m.node(f"udr_{sp.key}", x + 15, y + 132, w - 30, 30, "note",
                [f"UDR 0.0.0.0/0 → {ilb}" if row == 0 else f"UDR 0.0.0.0/0 → {ilb} · peered to hub"], parent=f"vnet_{sp.key}")
-        spoke_boxes.append((sp.key, x, w, row))
+        spoke_boxes.append((sp.key, x, w, row, y))
     if not cfg.spokes:
         m.node("no_spokes", 40, 640, 960, 40, "note", ["No workload spokes – add them on the Network tab"], parent="sub_conn")
 
@@ -198,7 +226,7 @@ def build(cfg: LandingZoneConfig) -> Model:
             "ILB · NVA · NAT · Service Health"], parent="mgmt_rg", stroke=C["blue"] if recips else C["off"])
     m.node("budget", 765, 872 + dy, 215, 78, "res",
            ["Budget + mandatory tags",
-            f"{cfg.monthly_budget_amount:,.0f} / month" if cfg.monthly_budget_amount > 0 else "no budget set",
+            f"€{cfg.monthly_budget_amount:,.0f} / month" if cfg.monthly_budget_amount > 0 else "no budget set",
             f"owner: {cfg.owner or '—'}"], parent="mgmt_rg", stroke=C["blue"])
     m.node("mgmt_note", 60, 965 + dy, 920, 34, "note",
            ["Azure Monitor Agent + DCR on NVAs · CI: fmt / validate / test / tflint / checkov"], parent="mgmt_rg")
@@ -263,10 +291,10 @@ def build(cfg: LandingZoneConfig) -> Model:
         m.edge("e_inet_nat", "internet", "nat", [(470, 114), (470, 132), (255, 132), (255, 280)], "egress (SNAT)", "traffic")
     m.edge("e_inet_bas", "internet", "bastion", [(620, 86), (990, 86), (990, 441), (960, 441)], "HTTPS 443 · admins", "traffic")
     m.edge("e_ilb_nva", "ilb", "nva1", [(285, 441), (320, 441)], "", "traffic")
-    for key, x, w, row in spoke_boxes:
+    for key, x, w, row, y in spoke_boxes:
         if row == 0:  # later rows are labelled "peered to hub" to keep the drawing clean
             cx = round(x + w / 2)
-            m.edge(f"e_peer_{key}", "hub", f"vnet_{key}", [(cx, 545), (cx, 610)], "peering", "peering")
+            m.edge(f"e_peer_{key}", "hub", f"vnet_{key}", [(cx, 545), (cx, y)], "peering", "peering")
 
     m.node("legend", 20, body_bottom + 18, 1620, 40, "legend", [])
     return m
@@ -300,6 +328,10 @@ def _svg_node(n: Node) -> str:
         out.append(_t(x + 12, y + 20, _fit(n.lines[0], w - 24, 13, True), 13, "600", n.stroke, "start"))
         if len(n.lines) > 1:
             out.append(_t(x + 12, y + 35, _fit(n.lines[1], w - 24), 11, "normal", C["muted"], "start"))
+    elif k == "frame":
+        out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="none" stroke="{n.stroke}" '
+                   f'stroke-width="1.8" stroke-dasharray="8 4"/>')
+        out.append(_t(x + 10, y + h - 6, _fit(n.lines[0], w - 20, 11, True), 11, "700", n.stroke, "start"))
     elif k == "subnet":
         out.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="5" fill="{C["grey_bg"]}" stroke="{C["grey"]}" stroke-width="1" stroke-dasharray="4 3"/>')
         out.append(_t(x + 10, y + 17, n.lines[0], 11, "600", C["muted"], "start"))
@@ -326,7 +358,8 @@ def _svg_node(n: Node) -> str:
             out.append(f'<line x1="{cx}" y1="{y+20}" x2="{cx+44}" y2="{y+20}" stroke="{s["color"]}" stroke-width="{s["width"]}"{dash} marker-end="url(#arr-{kind})"/>')
             out.append(_t(cx + 54, y + 24, label, 11, "normal", C["text"], "start"))
             cx += 74 + len(label) * 6.5
-        for label, col in [("connectivity", C["blue"]), ("tier-0 identity", C["red"]), ("VNet", C["green"]),
+        for label, col in [("connectivity", C["blue"]), ("tier-0 identity", C["red"]),
+                           ("shared services sub", C["lz_shared"]), ("production sub", C["lz_prod"]), ("VNet", C["green"]),
                            ("region", C["purple"]), ("NVA", C["orange"]), ("disabled", C["off"])]:
             out.append(f'<rect x="{cx}" y="{y+12}" width="16" height="16" rx="3" fill="#FFFFFF" stroke="{col}" stroke-width="2"/>')
             out.append(_t(cx + 24, y + 24, label, 11, "normal", C["text"], "start"))
@@ -390,7 +423,7 @@ def _depth(n: Node, byid) -> int:
 def render_svg(cfg: LandingZoneConfig, content: str | None = None) -> str:
     m = build(cfg)
     byid = m.byid
-    order = {"container": 0, "subnet": 1}
+    order = {"frame": 0, "container": 0, "subnet": 1}
     nodes = sorted(m.nodes, key=lambda n: (order.get(n.kind, 2), _depth(n, byid)))
     front = ("res", "note", "cloud", "legend", "title")
     body = [_svg_node(n) for n in nodes if n.kind not in front]
@@ -423,6 +456,10 @@ def _style(n: Node) -> str:
         return (f"rounded=1;arcSize=8;absoluteArcSize=1;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;"
                 f"verticalAlign=top;align=left;spacingLeft=10;spacingTop=2;fontSize=13;fontColor={n.stroke};"
                 f"fillColor={n.fill};strokeColor={n.stroke};strokeWidth={n.sw};dashed={int(n.dashed)};")
+    if k == "frame":
+        return (f"rounded=1;arcSize=9;absoluteArcSize=1;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;"
+                f"verticalAlign=bottom;align=left;spacingLeft=8;fontSize=11;fontStyle=1;fontColor={n.stroke};"
+                f"fillColor=none;strokeColor={n.stroke};strokeWidth=1.8;dashed=1;dashPattern=8 4;")
     if k == "subnet":
         return (f"rounded=1;arcSize=5;absoluteArcSize=1;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;"
                 f"verticalAlign=top;align=left;spacingLeft=8;fontSize=11;fontStyle=1;fontColor={C['muted']};"

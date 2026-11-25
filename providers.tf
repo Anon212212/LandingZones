@@ -88,3 +88,32 @@ provider "azurerm" {
     }
   }
 }
+
+# Landing-zone subscriptions for workload spokes. When unset they fall back
+# to the connectivity subscription (variable validation stops a spoke from
+# targeting an unset one).
+provider "azurerm" {
+  alias           = "shared"
+  subscription_id = var.shared_services_subscription_id != null ? var.shared_services_subscription_id : var.subscription_id
+
+  storage_use_azuread = true
+
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
+}
+
+provider "azurerm" {
+  alias           = "prod"
+  subscription_id = var.production_subscription_id != null ? var.production_subscription_id : var.subscription_id
+
+  storage_use_azuread = true
+
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
+}

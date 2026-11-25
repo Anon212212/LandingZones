@@ -153,6 +153,10 @@ CONTROLS: list[Control] = [
             check=lambda c: not any(r.access == "Allow" and "*" in r.destination_port_ranges
                                     for sp in c.spokes for r in sp.nsg_rules),
             hint="Replace '*' ports in spoke rules with the specific ports the workload needs."),
+    Control("SEC-17", "Workload spokes in dedicated landing-zone subscriptions", "Security",
+            {"WAF": "SE:04", "NIS2": "Art. 21(2)(a)", "DORA": "Art. 9(4)(c)"},
+            check=lambda c: all(sp.subscription != "connectivity" for sp in c.spokes),
+            hint="Move workload spokes out of the connectivity subscription (Network tab → spoke → Subscription)."),
     Control("REL-12", "Three-zone redundancy for NVAs and DCs", "Reliability",
             {"WAF": "RE:05", "NIS2": "Art. 21(2)(c)", "DORA": "Art. 11(1)"},
             check=lambda c: len(c.nva_zones) >= 3 and all(len(r.dc_zones) >= 3 for r in c.identity_regions),

@@ -42,3 +42,12 @@ def test_diagram_grows_with_spokes(cfg):
     assert sum(1 for n in m.nodes if n.id.startswith("vnet_")) == 6
     assert sum(1 for e in m.edges if e.id.startswith("e_peer_")) == 4      # first row of four
     assert m.height >= base
+
+
+def test_landing_zone_frames(cfg):
+    m = diagram.build(cfg)
+    frames = {n.id: n for n in m.nodes if n.kind == "frame"}
+    assert set(frames) == {"lz_shared_0", "lz_prod_0"}
+    assert m.byid["vnet_shared"].parent == "lz_shared_0" and m.byid["vnet_avd"].parent == "sub_conn"
+    assert frames["lz_prod_0"].lines[0].startswith("Production subscription · 55555555")
+    assert "(cont.)" not in frames["lz_shared_0"].lines[0]

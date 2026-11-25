@@ -6,9 +6,11 @@
 #   * a resource group + storage account for Terraform state (ZRS, TLS 1.2,
 #     Entra ID auth only, versioning, 30-day soft delete, delete lock)
 #   * two Entra ID applications with GitHub federated credentials:
-#       <prefix>-plan   Reader on both subscriptions; state read/lock (PR plans)
-#       <prefix>-apply  Contributor + User Access Administrator on both
-#                       subscriptions; state write (runs only after approval)
+#       <prefix>-plan   Reader on every subscription; state read/lock (PR plans)
+#       <prefix>-apply  Contributor + User Access Administrator on every
+#                       subscription; state write (runs only after approval)
+#   "Every subscription" = connectivity, identity and each --landing-zone-sub
+#   (e.g. shared services, production).
 #
 # Requires: az CLI logged in as someone who can create app registrations and
 # assign roles on both subscriptions. Use --dry-run to print what would run.
@@ -20,6 +22,7 @@ usage() {
 Usage: $0 --location LOC --state-rg NAME --state-account NAME
           --connectivity-sub GUID --identity-sub GUID
           --github-repo OWNER/REPO [--environment production]
+          [--landing-zone-sub GUID ...]
           [--name-prefix lz-pipeline] [--state-sub GUID] [--dry-run]
 USAGE
   exit 1
@@ -27,6 +30,7 @@ USAGE
 
 LOCATION="" STATE_RG="" STATE_ACCOUNT="" CONN_SUB="" ID_SUB="" REPO=""
 GH_ENV="production" PREFIX="lz-pipeline" STATE_SUB="" DRY_RUN=0
+LZ_SUBS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --location) LOCATION="$2"; shift 2 ;;
@@ -34,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --state-account) STATE_ACCOUNT="$2"; shift 2 ;;
     --connectivity-sub) CONN_SUB="$2"; shift 2 ;;
     --identity-sub) ID_SUB="$2"; shift 2 ;;
+    --landing-zone-sub) LZ_SUBS+=("$2"); shift 2 ;;
     --github-repo) REPO="$2"; shift 2 ;;
     --environment) GH_ENV="$2"; shift 2 ;;
     --name-prefix) PREFIX="$2"; shift 2 ;;
@@ -46,6 +51,7 @@ done
 [[ -n "$LOCATION" && -n "$STATE_RG" && -n "$STATE_ACCOUNT" && -n "$CONN_SUB" && -n "$ID_SUB" && -n "$REPO" ]] || usage
 [[ "$REPO" == */* ]] || { echo "--github-repo must be OWNER/REPO" >&2; exit 1; }
 STATE_SUB="${STATE_SUB:-$CONN_SUB}"
+ALL_SUBS=("$CONN_SUB" "$ID_SUB" ${LZ_SUBS[@]+"${LZ_SUBS[@]}"})
 
 # run CMD... – executes, or prints in --dry-run mode.
 # Dry-run traces go to stderr so they never pollute captured output.
@@ -107,12 +113,12 @@ assign() {  # sp-object-id role scope
 
 echo "== Plan identity (pull requests, read-only)"
 read -r PLAN_APP PLAN_SP < <(ensure_identity "$PREFIX-plan" "github-pr" "repo:$REPO:pull_request")
-for sub in "$CONN_SUB" "$ID_SUB"; do assign "$PLAN_SP" "Reader" "/subscriptions/$sub"; done
+for sub in "${ALL_SUBS[@]}"; do assign "$PLAN_SP" "Reader" "/subscriptions/$sub"; done
 assign "$PLAN_SP" "Storage Blob Data Contributor" "$SA_ID"   # state locking needs write
 
 echo "== Apply identity (environment '$GH_ENV', after approval)"
 read -r APPLY_APP APPLY_SP < <(ensure_identity "$PREFIX-apply" "github-env-$GH_ENV" "repo:$REPO:environment:$GH_ENV")
-for sub in "$CONN_SUB" "$ID_SUB"; do
+for sub in "${ALL_SUBS[@]}"; do
   assign "$APPLY_SP" "Contributor" "/subscriptions/$sub"
   assign "$APPLY_SP" "User Access Administrator" "/subscriptions/$sub"
 done
