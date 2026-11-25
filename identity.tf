@@ -235,7 +235,7 @@ module "identity" {
   address_space           = each.value.address_space
   dns_servers             = var.identity_dns_servers
   hub_vnet_id             = azurerm_virtual_network.hub.id
-  next_hop_ip             = coalesce(each.value.next_hop_ip, local.nva_ilb_frontend_ip)
+  next_hop_ip             = coalesce(each.value.next_hop_ip, local.nva_next_hop_ip)
   ad_client_cidrs         = local.ad_client_cidrs
   admin_source_cidrs      = local.identity_admin_cidrs
   ddos_protection_plan_id = var.ddos_protection_plan_id

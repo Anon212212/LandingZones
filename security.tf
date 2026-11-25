@@ -33,7 +33,7 @@ resource "azurerm_network_security_group" "nva" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_port_range          = "*"
-    destination_port_range     = "22"
+    destination_port_range     = tostring(local.nva_probe_port)
     source_address_prefix      = "AzureLoadBalancer"
     destination_address_prefix = "*"
   }
@@ -65,13 +65,13 @@ resource "azurerm_network_security_group" "nva" {
 }
 
 resource "azurerm_network_interface_security_group_association" "nva_external" {
-  count                     = local.nva_count
+  count                     = local.nva_linux ? local.nva_count : 0
   network_interface_id      = azurerm_network_interface.nva_external[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }
 
 resource "azurerm_network_interface_security_group_association" "nva_internal" {
-  count                     = local.nva_count
+  count                     = local.nva_linux ? local.nva_count : 0
   network_interface_id      = azurerm_network_interface.nva_internal[count.index].id
   network_security_group_id = azurerm_network_security_group.nva.id
 }

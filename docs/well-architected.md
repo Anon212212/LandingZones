@@ -47,7 +47,7 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | DDoS Network Protection | ⚙️ | `var.ddos_protection_plan_id`. A plan is about €2.7k/month, so share one across the tenant. |
 | The `VirtualNetwork` service tag also includes UDR prefixes, so with `0.0.0.0/0 → NVA`, spoke "Allow-VNet-Inbound" rules effectively allow any source that reaches the NVA | ⚠️ | Acceptable because the NVA is the only path in. Tighten spoke rules to explicit CIDRs for production workloads. |
 | Flow-log storage keeps shared-key access enabled | ⚠️ | Kept for Network Watcher compatibility. Terraform never uses keys. |
-| The Linux NVA is a router/SNAT, **not** an inspecting firewall (no IDPS, TLS inspection or FQDN filtering) | ⚠️ | For production, swap the image for a vendor NGFW or replace the pair with Azure Firewall Premium. The ILB/UDR design stays the same. |
+| Inspecting NGFW in the hub (FortiGate, Palo Alto VM-Series, SonicWall NSv, pfSense Plus) | ⚙️ | `nva_vendor` (designer Firewall tab). The default built-in Linux NVA routes and SNATs but doesn't inspect: designer control SEC-18 flags it. |
 | **Workloads in their own landing-zone subscriptions** (shared services, production, AVD), separate from connectivity and identity | ✅ | `modules/spoke`, `network.tf`, `providers.tf` |
 | **Identity is tier-0 in its own subscription** with its own Key Vault (premium, RBAC, purge protection) and Log Analytics (365 days, Entra-only) | ✅ | `identity.tf`, `providers.tf` |
 | DC admin passwords generated and stored only in the tier-0 Key Vault | ✅ | `modules/identity-region` |

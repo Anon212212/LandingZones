@@ -67,6 +67,7 @@ locals {
     nva_internal = cidrsubnet(var.hub_address_space, 3, 1)
     mgmt         = cidrsubnet(var.hub_address_space, 3, 2)
     bastion      = cidrsubnet(var.hub_address_space, 3, 3)
+    hasync       = cidrsubnet(var.hub_address_space, 3, 4) # third-party active-standby only
   }
 
   # Azure reserves the first four addresses of every subnet (network, gateway,
@@ -74,11 +75,22 @@ locals {
   #   ILB frontend        : internal host 4      → 10.145.0.36
   #   NVA-n internal NIC  : internal host 5+n    → 10.145.0.37, .38, ...
   #   NVA-n external NIC  : external host 4+n    → 10.145.0.4,  .5,  ...
-  nva_ilb_frontend_ip = cidrhost(local.hub_subnets.nva_internal, 4)
+  nva_ilb_frontend_ip = cidrhost(local.hub_subnets.nva_internal, 4) # ILB frontend, or the floating trust VIP
   nva_internal_gw     = cidrhost(local.hub_subnets.nva_internal, 1)
-  nva_count           = length(var.nva_zones)
-  nva_external_ips    = [for i in range(local.nva_count) : cidrhost(local.hub_subnets.nva_external, 4 + i)]
-  nva_internal_ips    = [for i in range(local.nva_count) : cidrhost(local.hub_subnets.nva_internal, 5 + i)]
+
+  #############################################
+  # Firewall appliance: built-in Linux or a third-party vendor module
+  #############################################
+  nva_linux   = var.nva_vendor == "linux"
+  nva_ha_mode = var.nva_ha_mode
+  nva_count   = local.nva_ha_mode == "single" ? 1 : (local.nva_ha_mode == "active-standby" ? 2 : length(var.nva_zones))
+  nva_hasync  = !local.nva_linux && local.nva_ha_mode == "active-standby"
+  # Where spokes and identity send 0.0.0.0/0: the ILB (active-active), the
+  # floating trust VIP (active-standby, same address) or the single firewall.
+  nva_next_hop_ip  = local.nva_ha_mode == "single" ? cidrhost(local.hub_subnets.nva_internal, 5) : local.nva_ilb_frontend_ip
+  nva_probe_port   = { linux = 22, fortigate = 8008, sonicwall = 443, paloalto = 443, pfsense = 443 }[var.nva_vendor]
+  nva_external_ips = [for i in range(local.nva_count) : cidrhost(local.hub_subnets.nva_external, 4 + i)]
+  nva_internal_ips = [for i in range(local.nva_count) : cidrhost(local.hub_subnets.nva_internal, 5 + i)]
 
   #############################################
   # Spokes – VNet, subnet, NSG, peering pair and route table are all

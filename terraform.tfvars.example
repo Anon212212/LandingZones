@@ -17,6 +17,14 @@ avd_subscription_id             = "66666666-6666-6666-6666-666666666666"
 # alert_email_addresses = ["platform-oncall@contoso.com"]
 # monthly_budget_amount = 1500 # in the billing currency (EUR)
 
+# --- Firewall appliance -----------------------------------------------------
+# nva_vendor                   = "fortigate"      # linux | fortigate | paloalto | sonicwall | pfsense
+# nva_ha_mode                  = "active-standby" # active-active | active-standby | single
+# nva_license_type             = "byol"
+# nva_size                     = "Standard_D4s_v5" # >= 4 vCPUs for vendors
+# nva_accept_marketplace_terms = true
+# nva_fortigate_license_tokens = ["...", "..."]   # better: TF_VAR_nva_fortigate_license_tokens
+
 # --- Spokes ---------------------------------------------------------------
 # spokes = {
 #   shared = { address_space = "10.145.1.0/24", subscription = "shared", subnet_name = "snet-shared-app" }

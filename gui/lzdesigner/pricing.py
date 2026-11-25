@@ -131,11 +131,16 @@ def estimate(cfg: LandingZoneConfig, book: PriceBook | None = None,
         lines.append(Line(cat, item, qty, round(monthly, 2), usage_based))
 
     # --- connectivity -----------------------------------------------------
-    n_nva = len(cfg.nva_zones)
-    add("Compute", f"NVA VMs ({cfg.nva_size.replace('Standard_', '')}, Linux)", f"{n_nva} × {HOURS} h",
+    n_nva = cfg.nva_count()
+    vendor = cfg.vendor
+    label = "Linux" if cfg.nva_vendor == "linux" else f"{vendor.product} compute"
+    add("Compute", f"Firewall VMs ({cfg.nva_size.replace('Standard_', '')}, {label})", f"{n_nva} × {HOURS} h",
         n_nva * HOURS * book.vm_hourly(cfg.location, cfg.nva_size, "linux"))
+    if cfg.nva_vendor != "linux":
+        add("Security", "NVA admin Key Vault", "1", book.price("key_vault_premium_month") / 2)
     add("Storage", "NVA OS disks (StandardSSD E4)", f"{n_nva}", n_nva * book.price("disk_standardssd_e4"))
-    add("Networking", "Internal Load Balancer (Standard, HA Ports)", "1", HOURS * book.price("lb_first5_rules_hourly"))
+    if cfg.nva_ha_mode == "active-active":
+        add("Networking", "Internal Load Balancer (Standard, HA Ports)", "1", HOURS * book.price("lb_first5_rules_hourly"))
     add("Networking", f"Azure Bastion ({cfg.bastion_sku})", "1",
         HOURS * book.price("bastion_hourly", cfg.bastion_sku) + HOURS * book.price("public_ip_hourly"))
     if cfg.enable_nat_gateway:
@@ -190,6 +195,11 @@ def estimate(cfg: LandingZoneConfig, book: PriceBook | None = None,
                  "(reservations, savings plans, EA/CSP pricing).")
     if cfg.ddos_protection_plan_id:
         notes.append("A DDoS Network Protection plan is usually shared across many VNets in the tenant.")
+    if cfg.nva_vendor != "linux":
+        lic = cfg.effective_license or ""
+        notes.append(f"{vendor.label}: compute only. "
+                     + ("Your BYOL licence is billed by the vendor." if lic == "byol" else
+                        "The Marketplace software fee (per vCPU-hour) is billed on top – check the offer's pricing tab."))
     return Estimate(book.currency, lines, "live" if book.live else "baseline", notes)
 
 

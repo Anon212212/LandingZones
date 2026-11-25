@@ -39,6 +39,9 @@ class DemoTenant:
     def feature_state(self, sub, namespace, feature):
         return "NotRegistered"
 
+    def marketplace_terms_accepted(self, sub, publisher, offer, plan):
+        return publisher in ("fortinet", "paloaltonetworks")   # SonicWall / pfSense not yet accepted
+
     def vm_skus(self, sub, location):
         def sku(name, vcpus):
             return {"resourceType": "virtualMachines", "name": name, "family": "standardDSv5Family",

@@ -15,6 +15,14 @@ mock_provider "azurerm" {
       display_name = "North Europe"
     }
   }
+
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "22222222-2222-2222-2222-222222222222"
+      object_id       = "33333333-3333-3333-3333-333333333333"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
 }
 
 mock_provider "azurerm" {
@@ -66,7 +74,7 @@ run "addressing_is_derived_and_avoids_reserved_ips" {
   command = plan
 
   assert {
-    condition     = azurerm_lb.nva_internal.frontend_ip_configuration[0].private_ip_address == "10.145.0.36"
+    condition     = azurerm_lb.nva_internal[0].frontend_ip_configuration[0].private_ip_address == "10.145.0.36"
     error_message = "ILB frontend must be the first assignable IP of the internal subnet."
   }
 
@@ -90,7 +98,7 @@ run "reliability_controls" {
   }
 
   assert {
-    condition     = length(azurerm_lb.nva_internal.frontend_ip_configuration[0].zones) == 3
+    condition     = length(azurerm_lb.nva_internal[0].frontend_ip_configuration[0].zones) == 3
     error_message = "ILB frontend must be zone-redundant."
   }
 
@@ -362,4 +370,126 @@ run "rejects_avd_sharing_production_subscription" {
   }
 
   expect_failures = [var.production_subscription_id]
+}
+
+run "hub_fortigate_active_standby" {
+  command = plan
+
+  variables {
+    nva_vendor  = "fortigate"
+    nva_ha_mode = "active-standby"
+    nva_size    = "Standard_D4s_v5"
+  }
+
+  assert {
+    condition     = length(module.nva_fortigate) == 1 && length(azurerm_linux_virtual_machine.nva) == 0
+    error_message = "FortiGate must replace the built-in Linux NVAs."
+  }
+
+  assert {
+    condition     = length(azurerm_lb.nva_internal) == 0 && length(azurerm_subnet.hub_hasync) == 1 && length(azurerm_role_assignment.nva_failover) == 1
+    error_message = "Active-standby: no internal LB, an HA sync subnet and the failover identity/role."
+  }
+
+  assert {
+    condition     = output.nva_next_hop_ip == "10.145.0.36" && alltrue([for m in local.spoke_modules : m.next_hop_ip == "10.145.0.36"])
+    error_message = "Spokes must route to the floating trust VIP."
+  }
+
+  assert {
+    condition     = join(",", module.nva_fortigate[0].nic_order) == "untrust,trust,hasync,mgmt" && length(module.nva_fortigate[0].vm_ids) == 2
+    error_message = "Two FortiGates with the A-P NIC layout."
+  }
+
+  assert {
+    condition     = length(azurerm_key_vault_secret.nva_admin) == 1
+    error_message = "The vendor admin password must be generated into the connectivity Key Vault."
+  }
+}
+
+run "hub_sonicwall_single" {
+  command = plan
+
+  variables {
+    nva_vendor  = "sonicwall"
+    nva_ha_mode = "single"
+    nva_size    = "Standard_D4s_v5"
+  }
+
+  assert {
+    condition     = length(module.nva_sonicwall[0].vm_ids) == 1 && length(azurerm_lb.nva_internal) == 0
+    error_message = "Single: one SonicWall and no load balancer."
+  }
+
+  assert {
+    condition     = output.nva_next_hop_ip == "10.145.0.37" && alltrue([for m in local.spoke_modules : m.next_hop_ip == "10.145.0.37"])
+    error_message = "Single: spokes route to the firewall's trust IP."
+  }
+}
+
+run "hub_pfsense_active_active" {
+  command = plan
+
+  variables {
+    nva_vendor  = "pfsense"
+    nva_ha_mode = "active-active"
+    nva_size    = "Standard_D4s_v5"
+  }
+
+  assert {
+    condition     = length(module.nva_pfsense[0].vm_ids) == 2 && length(azurerm_lb.nva_internal) == 1
+    error_message = "Active-active: firewalls behind the internal LB."
+  }
+
+  assert {
+    condition     = azurerm_lb_probe.nva[0].port == 443 && output.nva_next_hop_ip == "10.145.0.36"
+    error_message = "Probe on the vendor port; spokes route to the ILB."
+  }
+}
+
+run "hub_paloalto_active_active" {
+  command = plan
+
+  variables {
+    nva_vendor  = "paloalto"
+    nva_ha_mode = "active-active"
+    nva_size    = "Standard_D4s_v5"
+  }
+
+  assert {
+    condition     = join(",", module.nva_paloalto[0].nic_order) == "mgmt,untrust,trust"
+    error_message = "VM-Series NIC order: mgmt, untrust, trust."
+  }
+}
+
+run "rejects_linux_active_standby" {
+  command = plan
+
+  variables {
+    nva_ha_mode = "active-standby"
+  }
+
+  expect_failures = [var.nva_ha_mode]
+}
+
+run "rejects_pfsense_active_standby_in_hub" {
+  command = plan
+
+  variables {
+    nva_vendor  = "pfsense"
+    nva_ha_mode = "active-standby"
+    nva_size    = "Standard_D4s_v5"
+  }
+
+  expect_failures = [var.nva_ha_mode]
+}
+
+run "rejects_small_vm_for_vendor" {
+  command = plan
+
+  variables {
+    nva_vendor = "fortigate"
+  }
+
+  expect_failures = [var.nva_size]
 }

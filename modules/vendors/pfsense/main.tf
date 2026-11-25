@@ -85,7 +85,7 @@ module "nic" {
   )
   floating = var.ha_mode == "active-standby" && contains(["untrust", "trust"], each.value.role)
 
-  join_lb_pool = var.ha_mode == "active-active" && contains(["untrust", "trust"], each.value.role)
+  join_lb_pool = var.ha_mode == "active-active" && try(var.network.lb_join[each.value.role], false)
   lb_backend_pool_id = (
     var.ha_mode != "active-active" ? null :
     each.value.role == "trust" ? local.lbs.internal_backend_pool_id :

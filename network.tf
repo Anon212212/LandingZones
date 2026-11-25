@@ -64,7 +64,7 @@ locals {
     location                         = var.location
     region_short                     = local.region_short
     hub_vnet_id                      = azurerm_virtual_network.hub.id
-    next_hop_ip                      = local.nva_ilb_frontend_ip
+    next_hop_ip                      = local.nva_next_hop_ip
     bastion_subnet_cidr              = local.hub_subnets.bastion
     ddos_protection_plan_id          = var.ddos_protection_plan_id
     log_analytics_workspace_id       = azurerm_log_analytics_workspace.law.id

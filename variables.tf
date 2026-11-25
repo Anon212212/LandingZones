@@ -358,6 +358,103 @@ variable "nva_zones" {
   }
 }
 
+variable "nva_vendor" {
+  description = "Firewall appliance in the hub: linux (built-in Ubuntu router/SNAT) | fortigate | sonicwall | paloalto | pfsense."
+  type        = string
+  default     = "linux"
+
+  validation {
+    condition     = contains(["linux", "fortigate", "sonicwall", "paloalto", "pfsense"], var.nva_vendor)
+    error_message = "nva_vendor must be linux, fortigate, sonicwall, paloalto or pfsense."
+  }
+}
+
+variable "nva_ha_mode" {
+  description = "single | active-standby (Azure API failover, no LB) | active-active (internal LB, HA Ports). The built-in Linux NVA supports active-active only."
+  type        = string
+  default     = "active-active"
+
+  validation {
+    condition     = contains(["single", "active-standby", "active-active"], var.nva_ha_mode)
+    error_message = "nva_ha_mode must be single, active-standby or active-active."
+  }
+
+  validation {
+    condition     = var.nva_vendor != "linux" || var.nva_ha_mode == "active-active"
+    error_message = "The built-in Linux NVA runs active-active behind the internal load balancer only."
+  }
+
+  validation {
+    condition     = !(var.nva_vendor == "pfsense" && var.nva_ha_mode == "active-standby")
+    error_message = "pfSense active-standby needs CARP multicast, which Azure doesn't carry. Use active-active or single."
+  }
+}
+
+variable "nva_license_type" {
+  description = "Third-party NVAs: null = vendor default (byol; payg for pfSense). FortiGate/SonicWall byol|payg · Palo Alto byol|bundle1|bundle2|bundle3 · pfSense payg|byol."
+  type        = string
+  default     = null
+}
+
+variable "nva_accept_marketplace_terms" {
+  description = "Third-party NVAs: accept the image's Marketplace terms in the connectivity subscription (first deployment)."
+  type        = bool
+  default     = false
+}
+
+variable "nva_marketplace_offer" {
+  description = "Third-party NVAs: override the Marketplace offer."
+  type        = string
+  default     = null
+}
+
+variable "nva_marketplace_sku" {
+  description = "Third-party NVAs: override the Marketplace SKU/plan."
+  type        = string
+  default     = null
+}
+
+variable "nva_admin_password" {
+  description = "Third-party NVAs: admin password. Null = generated and stored in the connectivity Key Vault (no pipeline secret needed)."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "nva_fortigate_license_tokens" {
+  description = "FortiGate BYOL: FortiFlex tokens, one per firewall."
+  type        = list(string)
+  default     = []
+  sensitive   = true
+}
+
+variable "nva_paloalto_bootstrap" {
+  description = "Palo Alto: bootstrap Azure Files share (access key in nva_paloalto_bootstrap_access_key)."
+  type = object({
+    storage_account = string
+    file_share      = string
+    share_directory = optional(string)
+  })
+  default = null
+}
+
+variable "nva_paloalto_bootstrap_access_key" {
+  type      = string
+  default   = null
+  sensitive = true
+}
+
+variable "nva_paloalto_mgmt_interface_swap" {
+  type    = bool
+  default = false
+}
+
+variable "nva_custom_data" {
+  description = "SonicWall / pfSense: optional custom data for the image."
+  type        = string
+  default     = null
+}
+
 variable "enable_resource_locks" {
   description = "[Reliability] CanNotDelete locks on the hub VNet and Log Analytics workspace. Disable before a deliberate teardown."
   type        = bool
@@ -372,6 +469,11 @@ variable "nva_admin_username" {
   description = "Admin username for the NVAs."
   type        = string
   default     = "nvaadmin"
+
+  validation {
+    condition     = !contains(["admin", "root", "administrator"], lower(var.nva_admin_username))
+    error_message = "nva_admin_username can't be admin, root or administrator (Marketplace firewall images reject them)."
+  }
 }
 
 variable "nva_admin_ssh_public_key" {
@@ -485,9 +587,15 @@ variable "enable_nat_gateway" {
 #############################################
 
 variable "nva_size" {
-  description = "[Perf/Cost] NVA VM size. Must support 2+ NICs, accelerated networking and Trusted Launch."
+  description = "[Perf/Cost] NVA VM size. Must support 2+ NICs and accelerated networking. Third-party NVAs need >= 4 vCPUs (e.g. Standard_D4s_v5)."
   type        = string
   default     = "Standard_D2s_v5"
+
+  validation {
+    condition = var.nva_vendor == "linux" || (can(regex("^Standard_[A-Za-z]+[0-9]+", var.nva_size)) &&
+    tonumber(regex("^Standard_[A-Za-z]+([0-9]+)", var.nva_size)[0]) >= 4)
+    error_message = "Third-party firewall NVAs need at least 4 vCPUs (e.g. Standard_D4s_v5 or Standard_F4s_v2) for accelerated networking."
+  }
 }
 
 variable "nva_cpu_alert_threshold" {

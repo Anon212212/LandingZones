@@ -3,6 +3,8 @@
 #############################################
 
 resource "azurerm_lb" "nva_internal" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name                = local.names.ilb
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
@@ -19,28 +21,34 @@ resource "azurerm_lb" "nva_internal" {
 }
 
 resource "azurerm_lb_backend_address_pool" "nva" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name            = "be-nva"
-  loadbalancer_id = azurerm_lb.nva_internal.id
+  loadbalancer_id = azurerm_lb.nva_internal[0].id
 }
 
 resource "azurerm_lb_probe" "nva" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name                = "probe-nva"
-  loadbalancer_id     = azurerm_lb.nva_internal.id
+  loadbalancer_id     = azurerm_lb.nva_internal[0].id
   protocol            = "Tcp"
-  port                = 22
+  port                = local.nva_probe_port
   interval_in_seconds = 5
   probe_threshold     = 2
 }
 
 resource "azurerm_lb_rule" "nva_ha_ports" {
+  count = local.nva_ha_mode == "active-active" ? 1 : 0
+
   name                           = "rule-ha-ports"
-  loadbalancer_id                = azurerm_lb.nva_internal.id
+  loadbalancer_id                = azurerm_lb.nva_internal[0].id
   protocol                       = "All"
   frontend_port                  = 0
   backend_port                   = 0
   frontend_ip_configuration_name = "fe-internal"
-  backend_address_pool_ids       = [azurerm_lb_backend_address_pool.nva.id]
-  probe_id                       = azurerm_lb_probe.nva.id
+  backend_address_pool_ids       = [azurerm_lb_backend_address_pool.nva[0].id]
+  probe_id                       = azurerm_lb_probe.nva[0].id
   floating_ip_enabled            = true
   load_distribution              = "Default" # 5-tuple; HA Ports keeps flows symmetric
 }
@@ -50,7 +58,7 @@ resource "azurerm_lb_rule" "nva_ha_ports" {
 #############################################
 
 resource "azurerm_network_interface" "nva_external" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   name                           = "nic-${local.nva_names[count.index]}-ext"
   location                       = var.location
@@ -68,7 +76,7 @@ resource "azurerm_network_interface" "nva_external" {
 }
 
 resource "azurerm_network_interface" "nva_internal" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   name                           = "nic-${local.nva_names[count.index]}-int"
   location                       = var.location
@@ -86,19 +94,20 @@ resource "azurerm_network_interface" "nva_internal" {
 }
 
 resource "azurerm_network_interface_backend_address_pool_association" "nva_internal" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   network_interface_id    = azurerm_network_interface.nva_internal[count.index].id
   ip_configuration_name   = "internal"
-  backend_address_pool_id = azurerm_lb_backend_address_pool.nva.id
+  backend_address_pool_id = azurerm_lb_backend_address_pool.nva[0].id
 }
 
 #############################################
-# Linux NVAs (one per zone)
+# Built-in Linux NVAs (nva_vendor = "linux"), one per zone. Third-party
+# firewalls are in firewall.tf.
 #############################################
 
 resource "azurerm_linux_virtual_machine" "nva" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   name                            = local.nva_names[count.index]
   computer_name                   = "nva${count.index + 1}"
@@ -174,7 +183,7 @@ resource "azurerm_linux_virtual_machine" "nva" {
 #############################################
 
 resource "azurerm_virtual_machine_extension" "nva_ama" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   name                       = "AzureMonitorLinuxAgent"
   virtual_machine_id         = azurerm_linux_virtual_machine.nva[count.index].id
@@ -187,7 +196,7 @@ resource "azurerm_virtual_machine_extension" "nva_ama" {
 }
 
 resource "azurerm_monitor_data_collection_rule_association" "nva" {
-  count = local.nva_count
+  count = local.nva_linux ? local.nva_count : 0
 
   name                    = "dcra-${local.nva_names[count.index]}"
   target_resource_id      = azurerm_linux_virtual_machine.nva[count.index].id

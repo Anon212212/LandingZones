@@ -156,6 +156,22 @@ def validate(cfg: LandingZoneConfig) -> list[Issue]:
                     x in ("*", "0.0.0.0/0", "Internet", "Any") for x in r.source_address_prefixes):
                 add("spokes", f"{where}: inbound from the Internet is not allowed.", "Network")
 
+    # Firewall appliance
+    from .catalog import NVA_HA_MODES, NVA_VENDORS, vm_vcpus
+    v = NVA_VENDORS.get(cfg.nva_vendor)
+    if v is None:
+        add("nva_vendor", "Choose a firewall appliance.", "Firewall")
+    else:
+        if cfg.nva_ha_mode not in v.ha_modes:
+            allowed = ", ".join(NVA_HA_MODES[m].split(" –")[0] for m in v.ha_modes)
+            add("nva_ha_mode", f"{v.label} supports: {allowed}.", "Firewall")
+        if cfg.nva_license_type and cfg.nva_license_type not in v.licenses:
+            add("nva_license_type", f"{v.label} licence must be one of {', '.join(v.licenses)}.", "Firewall")
+        if cfg.nva_vendor != "linux" and vm_vcpus(cfg.nva_size) < 4:
+            add("nva_size", f"{v.label} needs at least 4 vCPUs for accelerated networking.", "Firewall")
+    if (cfg.nva_admin_username or "").lower() in RESERVED_USERS or not cfg.nva_admin_username:
+        add("nva_admin_username", "Choose a non-reserved NVA admin username.", "Security")
+
     # Resilience
     if len(set(cfg.nva_zones)) < 2:
         add("nva_zones", "At least two NVAs in distinct zones are required.", "Resilience")
