@@ -84,11 +84,11 @@ A new design shows what's missing. Each item links to the tab where it's fixed, 
 
 ### Basics and network
 
-Organisation, region and subscriptions on the left. One base `/16` plans every address space automatically, including the hub subnets and the ILB next hop, on the right.
+After *Sign in to Azure*, the five subscriptions are picked from dropdowns (left). One base `/16` plans every address space automatically; spokes are listed with their subscription and NSG rules (right).
 
 <p>
   <img src="../docs/images/designer-basics.png" width="49%" alt="Basics tab: org prefix, environment, owner, cost centre, region and subscriptions">
-  <img src="../docs/images/designer-network.png" width="49%" alt="Network tab: automatic address plan from one /16 and the derived address table">
+  <img src="../docs/images/designer-network.png" width="49%" alt="Network tab: automatic address plan from one /16 and four workload spokes">
 </p>
 
 ### Firewall appliance
@@ -105,9 +105,7 @@ Under the dropdowns, *What you get* summarises the result for the current choice
 
 ![Firewall tab with FortiGate active/standby selected](../docs/images/designer-firewall.png)
 
-The diagram, cost estimate, compliance controls (SEC-18 inspecting firewall, REL-13 no single point of failure) and pre-flight follow the choice. Pre-flight also checks the vendor's **Marketplace terms** in the connectivity subscription. In active/standby the diagram shows the floating trust VIP instead of the load balancer:
-
-![Live architecture with a FortiGate active/standby pair](../docs/images/designer-diagram-firewall.png)
+The diagram, cost estimate, compliance controls (SEC-18 inspecting firewall, REL-13 no single point of failure) and pre-flight follow the choice. Pre-flight also checks the vendor's **Marketplace terms** in the connectivity subscription. In active/standby the diagram shows the floating trust VIP instead of the load balancer (see the [full-size diagram](#live-architecture-full-size)).
 
 ### Resilience and identity
 
@@ -138,22 +136,25 @@ Switch NIS2 and DORA on to see every control with its WAF / NIS2 / DORA referenc
 
 ### Spokes, cost and pre-flight
 
-Spokes are added on the Network tab, each with its own NSG rules. The cost estimate and pre-flight checks sit next to the diagram. Here, pre-flight found an existing VNet that overlaps the `prod` spoke.
+Spokes are added on the Network tab. *NSG rules* opens an editor for that spoke's own rules, which are added to the baseline:
 
-![Spokes editor, cost estimate and pre-flight results against a (demo) tenant](../docs/images/designer-azure.png)
+![NSG rules editor for the web spoke](../docs/images/designer-spokes.png)
 
-<p>
-  <img src="../docs/images/designer-spokes.png" width="49%" alt="NSG rules editor for a spoke">
-  <img src="../docs/images/designer-pipeline.png" width="49%" alt="Export tab: deployment pipeline with generated bootstrap command">
-</p>
+The cost estimate and pre-flight checks sit next to the diagram. Here, pre-flight against the demo tenant found an existing VNet that overlaps the `prod` spoke, and two regions without a Network Watcher yet:
+
+![Estimated monthly cost by category, and pre-flight results with one failure and two warnings](../docs/images/designer-cost-preflight.png)
+
+### Deployment pipeline
+
+At the bottom of the Export tab, fill in the GitHub repository and environment to write `environments/<env>.tfvars` and get the `scripts/bootstrap.sh` command, prefilled with your five subscriptions:
+
+<img src="../docs/images/designer-pipeline.png" width="60%" alt="Export tab: deployment pipeline with generated bootstrap command">
 
 ### Live architecture, full size
 
-The diagram follows every choice. The first image shows the High preset with three NVAs and three DCs per region; the second adds a fourth spoke. *Download draw.io* saves an editable copy.
+The diagram follows every choice. This one shows a FortiGate active/standby pair behind its floating trust VIP, four workload spokes (the `web` spoke stays in connectivity; the others are in their own subscriptions), three DCs per region from the High preset, and the NIS2 and DORA badges. *Download draw.io* saves an editable copy.
 
-![Full-size live architecture diagram with NIS2 and DORA badges](../docs/images/designer-diagram.png)
-
-![Full-size diagram with four workload spokes](../docs/images/designer-diagram-spokes.png)
+![Full-size live architecture: FortiGate active/standby, four spokes, tier-0 identity in two regions, WAF, NIS2 and DORA badges](../docs/images/designer-diagram.png)
 
 ## How the guardrails work
 
