@@ -3,32 +3,45 @@
 #############################################
 
 resource "azurerm_virtual_network" "hub" {
-  name                = "${var.org_prefix}-hub-vnet"
+  name                = local.names.hub_vnet
   address_space       = [var.hub_address_space]
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
   tags                = local.tags
+
+  dynamic "ddos_protection_plan" {
+    for_each = var.ddos_protection_plan_id == null ? [] : [var.ddos_protection_plan_id]
+    content {
+      id     = ddos_protection_plan.value
+      enable = true
+    }
+  }
 }
 
+# [Security] default_outbound_access_enabled = false makes every subnet
+# private: egress only via the NVAs / NAT Gateway, never implicit SNAT.
 resource "azurerm_subnet" "hub_nva_external" {
-  name                 = "nva-external-snet"
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.hub.name
-  address_prefixes     = [local.hub_subnets.nva_external]
+  name                            = "snet-nva-external"
+  resource_group_name             = azurerm_resource_group.connectivity.name
+  virtual_network_name            = azurerm_virtual_network.hub.name
+  address_prefixes                = [local.hub_subnets.nva_external]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "hub_nva_internal" {
-  name                 = "nva-internal-snet"
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.hub.name
-  address_prefixes     = [local.hub_subnets.nva_internal]
+  name                            = "snet-nva-internal"
+  resource_group_name             = azurerm_resource_group.connectivity.name
+  virtual_network_name            = azurerm_virtual_network.hub.name
+  address_prefixes                = [local.hub_subnets.nva_internal]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "hub_mgmt" {
-  name                 = "mgmt-snet"
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.hub.name
-  address_prefixes     = [local.hub_subnets.mgmt]
+  name                            = "snet-mgmt"
+  resource_group_name             = azurerm_resource_group.connectivity.name
+  virtual_network_name            = azurerm_virtual_network.hub.name
+  address_prefixes                = [local.hub_subnets.mgmt]
+  default_outbound_access_enabled = false
 }
 
 resource "azurerm_subnet" "hub_bastion" {
@@ -45,20 +58,29 @@ resource "azurerm_subnet" "hub_bastion" {
 resource "azurerm_virtual_network" "spoke" {
   for_each = local.spokes
 
-  name                = each.value.vnet_name
+  name                = "vnet-${var.org_prefix}-${each.key}-${local.suffix}"
   address_space       = [each.value.address_space]
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
   tags                = local.tags
+
+  dynamic "ddos_protection_plan" {
+    for_each = var.ddos_protection_plan_id == null ? [] : [var.ddos_protection_plan_id]
+    content {
+      id     = ddos_protection_plan.value
+      enable = true
+    }
+  }
 }
 
 resource "azurerm_subnet" "spoke" {
   for_each = local.spokes
 
-  name                 = each.value.subnet_name
-  resource_group_name  = azurerm_resource_group.connectivity.name
-  virtual_network_name = azurerm_virtual_network.spoke[each.key].name
-  address_prefixes     = [each.value.subnet_prefix]
+  name                            = each.value.subnet_name
+  resource_group_name             = azurerm_resource_group.connectivity.name
+  virtual_network_name            = azurerm_virtual_network.spoke[each.key].name
+  address_prefixes                = [each.value.subnet_prefix]
+  default_outbound_access_enabled = false
 }
 
 #############################################
@@ -68,7 +90,7 @@ resource "azurerm_subnet" "spoke" {
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   for_each = local.spokes
 
-  name                         = "hub-to-${each.key}"
+  name                         = "peer-hub-to-${each.key}"
   resource_group_name          = azurerm_resource_group.connectivity.name
   virtual_network_name         = azurerm_virtual_network.hub.name
   remote_virtual_network_id    = azurerm_virtual_network.spoke[each.key].id
@@ -79,7 +101,7 @@ resource "azurerm_virtual_network_peering" "hub_to_spoke" {
 resource "azurerm_virtual_network_peering" "spoke_to_hub" {
   for_each = local.spokes
 
-  name                         = "${each.key}-to-hub"
+  name                         = "peer-${each.key}-to-hub"
   resource_group_name          = azurerm_resource_group.connectivity.name
   virtual_network_name         = azurerm_virtual_network.spoke[each.key].name
   remote_virtual_network_id    = azurerm_virtual_network.hub.id
@@ -94,7 +116,7 @@ resource "azurerm_virtual_network_peering" "spoke_to_hub" {
 resource "azurerm_route_table" "spoke" {
   for_each = local.spokes
 
-  name                = "${var.org_prefix}-${each.key}-rt"
+  name                = "rt-${var.org_prefix}-${each.key}-${local.suffix}"
   location            = var.location
   resource_group_name = azurerm_resource_group.connectivity.name
   tags                = local.tags
@@ -120,27 +142,33 @@ resource "azurerm_subnet_route_table_association" "spoke" {
 
 #############################################
 # NAT Gateway (NVA Internet egress)
+#
+# Standard NAT Gateway is a zonal resource; left non-zonal here so Azure
+# places it. See docs/well-architected.md for the reliability trade-off.
 #############################################
 
 resource "azurerm_public_ip" "nat" {
   count = var.enable_nat_gateway ? 1 : 0
 
-  name                = "${var.org_prefix}-nat-pip"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.connectivity.name
-  allocation_method   = "Static"
-  sku                 = "Standard"
-  tags                = local.tags
+  name                    = local.names.nat_pip
+  location                = var.location
+  resource_group_name     = azurerm_resource_group.connectivity.name
+  allocation_method       = "Static"
+  sku                     = "Standard"
+  ddos_protection_mode    = var.ddos_protection_plan_id == null ? "VirtualNetworkInherited" : "Enabled"
+  ddos_protection_plan_id = var.ddos_protection_plan_id
+  tags                    = local.tags
 }
 
 resource "azurerm_nat_gateway" "nva" {
   count = var.enable_nat_gateway ? 1 : 0
 
-  name                = "${var.org_prefix}-nat"
-  location            = var.location
-  resource_group_name = azurerm_resource_group.connectivity.name
-  sku_name            = "Standard"
-  tags                = local.tags
+  name                    = local.names.nat
+  location                = var.location
+  resource_group_name     = azurerm_resource_group.connectivity.name
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = 4
+  tags                    = local.tags
 }
 
 resource "azurerm_nat_gateway_public_ip_association" "nva" {

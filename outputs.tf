@@ -1,3 +1,10 @@
+output "resource_group_names" {
+  value = {
+    connectivity = azurerm_resource_group.connectivity.name
+    management   = azurerm_resource_group.management.name
+  }
+}
+
 output "hub_vnet_id" {
   value = azurerm_virtual_network.hub.id
 }
@@ -48,4 +55,9 @@ output "bastion_name" {
 
 output "log_analytics_workspace_id" {
   value = azurerm_log_analytics_workspace.law.id
+}
+
+output "action_group_id" {
+  description = "Platform alert action group (null when no alert_email_addresses)."
+  value       = one(local.action_group_ids)
 }
