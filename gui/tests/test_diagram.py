@@ -47,7 +47,7 @@ def test_diagram_grows_with_spokes(cfg):
 def test_landing_zone_frames(cfg):
     m = diagram.build(cfg)
     frames = {n.id: n for n in m.nodes if n.kind == "frame"}
-    assert set(frames) == {"lz_shared_0", "lz_prod_0"}
-    assert m.byid["vnet_shared"].parent == "lz_shared_0" and m.byid["vnet_avd"].parent == "sub_conn"
+    assert set(frames) == {"lz_shared_0", "lz_prod_0", "lz_avd_0"}
+    assert m.byid["vnet_shared"].parent == "lz_shared_0" and m.byid["vnet_avd"].parent == "lz_avd_0"
     assert frames["lz_prod_0"].lines[0].startswith("Production subscription · 55555555")
     assert "(cont.)" not in frames["lz_shared_0"].lines[0]

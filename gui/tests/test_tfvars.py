@@ -43,7 +43,8 @@ def test_spokes_render_with_rules(cfg):
 
 def test_spoke_subscriptions_render(cfg):
     v = tfvars.tfvars_values(cfg)
-    assert v["spokes"]["shared"]["subscription"] == "shared" and v["spokes"]["avd"]["subscription"] == "connectivity"
+    assert v["spokes"]["shared"]["subscription"] == "shared" and v["spokes"]["avd"]["subscription"] == "avd"
+    assert v["avd_subscription_id"] == "66666666-6666-6666-6666-666666666666"
     assert v["production_subscription_id"] == "55555555-5555-5555-5555-555555555555"
     for sp in cfg.spokes:
         sp.subscription = "connectivity"

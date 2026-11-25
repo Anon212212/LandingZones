@@ -95,12 +95,12 @@ locals {
   }
 
   spokes_by_subscription = {
-    for target in ["connectivity", "shared", "prod"] :
+    for target in ["connectivity", "shared", "prod", "avd"] :
     target => { for k, v in local.spokes : k => v if v.subscription == target }
   }
 
   # All spoke module instances, whichever subscription they live in.
-  spoke_modules = merge(module.spokes_connectivity, module.spokes_shared, module.spokes_prod)
+  spoke_modules = merge(module.spokes_connectivity, module.spokes_shared, module.spokes_prod, module.spokes_avd)
 
   # Everything the NVAs must route back through their internal NIC.
   spoke_address_spaces = concat(

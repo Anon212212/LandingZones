@@ -44,6 +44,10 @@ mock_provider "azurerm" {
   alias = "prod"
 }
 
+mock_provider "azurerm" {
+  alias = "avd"
+}
+
 run "designer_tfvars_plan" {
   command = plan
 

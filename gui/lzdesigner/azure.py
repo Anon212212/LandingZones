@@ -199,7 +199,8 @@ def run_preflight(cfg: LandingZoneConfig, client) -> list[Check]:
 
     conn, ident = cfg.subscription_id.lower(), cfg.identity_subscription_id.lower()
     subs = {s["subscriptionId"].lower(): s for s in client.subscriptions()}
-    landing = [("Shared services" if t == "shared" else "Production", cfg.subscription_for(t).lower())
+    from .model import SPOKE_SUBSCRIPTIONS
+    landing = [(SPOKE_SUBSCRIPTIONS[t] if t != "avd" else "AVD", cfg.subscription_for(t).lower())
                for t in cfg.used_spoke_subscriptions()]
 
     # 1. Subscriptions -----------------------------------------------------------

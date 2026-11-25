@@ -20,6 +20,14 @@ SPOKE_SUBSCRIPTIONS = {
     "connectivity": "Connectivity",
     "shared": "Shared services",
     "prod": "Production",
+    "avd": "Azure Virtual Desktop",
+}
+
+# Terraform variable holding each landing-zone subscription.
+SPOKE_SUBSCRIPTION_FIELDS = {
+    "shared": "shared_services_subscription_id",
+    "prod": "production_subscription_id",
+    "avd": "avd_subscription_id",
 }
 
 
@@ -52,7 +60,7 @@ def default_spokes() -> list[Spoke]:
     return [
         Spoke("shared", "10.145.1.0/24", "snet-shared-app", description="Shared services", subscription="shared"),
         Spoke("prod", "10.145.2.0/24", "snet-prod-app", description="Production", subscription="prod"),
-        Spoke("avd", "10.145.3.0/24", "snet-avd-sessionhosts", description="Azure Virtual Desktop"),
+        Spoke("avd", "10.145.3.0/24", "snet-avd-sessionhosts", description="Azure Virtual Desktop", subscription="avd"),
     ]
 
 
@@ -79,6 +87,7 @@ class LandingZoneConfig:
     identity_subscription_id: str = ""
     shared_services_subscription_id: str = ""
     production_subscription_id: str = ""
+    avd_subscription_id: str = ""
     nva_admin_username: str = "nvaadmin"
     nva_admin_ssh_public_key: str = ""
 
@@ -283,8 +292,10 @@ class LandingZoneConfig:
         return [str(base + 4 + i) for i in range(len(region.dc_zones))]
 
     def subscription_for(self, target: str) -> str:
-        return {"connectivity": self.subscription_id, "shared": self.shared_services_subscription_id,
-                "prod": self.production_subscription_id}.get(target, "")
+        if target == "connectivity":
+            return self.subscription_id
+        fld = SPOKE_SUBSCRIPTION_FIELDS.get(target)
+        return getattr(self, fld) if fld else ""
 
     def used_spoke_subscriptions(self) -> list[str]:
         return [t for t in SPOKE_SUBSCRIPTIONS if t != "connectivity" and any(s.subscription == t for s in self.spokes)]

@@ -31,6 +31,22 @@ jobs:
       - name: terraform test (mocked provider – WAF guardrails)
         run: terraform test
 
+      - name: firewall modules – terraform test (all vendors × HA modes)
+        working-directory: modules/nva-firewall
+        run: |
+          terraform init -backend=false -input=false
+          terraform test
+
+      - name: client environments – validate + mocked plan
+        run: |
+          for env in environments/client-*/; do
+            echo "::group::$env"
+            terraform -chdir="$env" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$env" validate
+            terraform -chdir="$env" test
+            echo "::endgroup::"
+          done
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

@@ -164,6 +164,36 @@ module "spokes_prod" {
   network_watcher_resource_group   = local.spoke_module_inputs.network_watcher_resource_group
 }
 
+module "spokes_avd" {
+  source   = "./modules/spoke"
+  for_each = local.spokes_by_subscription["avd"]
+  providers = {
+    azurerm = azurerm.avd
+  }
+
+  name          = each.key
+  address_space = each.value.address_space
+  subnet_name   = each.value.subnet_name
+  nsg_rules     = each.value.nsg_rules
+  tags          = merge(local.tags, { landing-zone = "avd", spoke = each.key })
+
+  org_prefix                       = local.spoke_module_inputs.org_prefix
+  environment                      = local.spoke_module_inputs.environment
+  location                         = local.spoke_module_inputs.location
+  region_short                     = local.spoke_module_inputs.region_short
+  hub_vnet_id                      = local.spoke_module_inputs.hub_vnet_id
+  next_hop_ip                      = local.spoke_module_inputs.next_hop_ip
+  bastion_subnet_cidr              = local.spoke_module_inputs.bastion_subnet_cidr
+  ddos_protection_plan_id          = local.spoke_module_inputs.ddos_protection_plan_id
+  log_analytics_workspace_id       = local.spoke_module_inputs.log_analytics_workspace_id
+  log_analytics_workspace_guid     = local.spoke_module_inputs.log_analytics_workspace_guid
+  log_analytics_workspace_location = local.spoke_module_inputs.log_analytics_workspace_location
+  enable_flow_logs                 = local.spoke_module_inputs.enable_flow_logs
+  flow_log_storage_account_id      = local.spoke_module_inputs.flow_log_storage_account_id
+  flow_log_retention_days          = local.spoke_module_inputs.flow_log_retention_days
+  network_watcher_resource_group   = local.spoke_module_inputs.network_watcher_resource_group
+}
+
 # Hub → spoke peerings (connectivity subscription side).
 resource "azurerm_virtual_network_peering" "hub_to_spoke" {
   for_each = local.spokes

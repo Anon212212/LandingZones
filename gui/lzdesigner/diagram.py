@@ -27,11 +27,13 @@ C = {
     "off": "#C8C6C4",
     "lz_shared": "#038387",
     "lz_prod": "#B4009E",
+    "lz_avd": "#8E562E",
 }
 
 SPOKE_TOP, SPOKE_ROW_H = 618, 232
 LZ_STYLE = {"shared": ("Shared services subscription", C["lz_shared"]),
-            "prod": ("Production subscription", C["lz_prod"])}
+            "prod": ("Production subscription", C["lz_prod"]),
+            "avd": ("AVD subscription", C["lz_avd"])}
 
 EDGE_STYLE = {
     "traffic": dict(color=C["blue"], dash=None, start=False, width=1.8),
@@ -170,7 +172,7 @@ def build(cfg: LandingZoneConfig) -> Model:
 
     ilb = cfg.ilb_ip() or "ILB"
     # Spokes grouped by subscription so each landing zone forms one frame.
-    order = {"connectivity": 0, "shared": 1, "prod": 2}
+    order = {"connectivity": 0, "shared": 1, "prod": 2, "avd": 3}
     ordered = sorted(cfg.spokes, key=lambda sp: order.get(sp.subscription, 9))
     w = (960 - 15 * (per_row - 1)) / per_row
     placed = []
@@ -359,7 +361,8 @@ def _svg_node(n: Node) -> str:
             out.append(_t(cx + 54, y + 24, label, 11, "normal", C["text"], "start"))
             cx += 74 + len(label) * 6.5
         for label, col in [("connectivity", C["blue"]), ("tier-0 identity", C["red"]),
-                           ("shared services sub", C["lz_shared"]), ("production sub", C["lz_prod"]), ("VNet", C["green"]),
+                           ("shared services sub", C["lz_shared"]), ("production sub", C["lz_prod"]),
+                           ("AVD sub", C["lz_avd"]), ("VNet", C["green"]),
                            ("region", C["purple"]), ("NVA", C["orange"]), ("disabled", C["off"])]:
             out.append(f'<rect x="{cx}" y="{y+12}" width="16" height="16" rx="3" fill="#FFFFFF" stroke="{col}" stroke-width="2"/>')
             out.append(_t(cx + 24, y + 24, label, 11, "normal", C["text"], "start"))

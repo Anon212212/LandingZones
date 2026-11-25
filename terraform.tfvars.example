@@ -8,6 +8,7 @@ identity_subscription_id = "11111111-1111-1111-1111-111111111111" # dedicated ti
 # Landing-zone subscriptions for the default shared / prod spokes
 shared_services_subscription_id = "44444444-4444-4444-4444-444444444444"
 production_subscription_id      = "55555555-5555-5555-5555-555555555555"
+avd_subscription_id             = "66666666-6666-6666-6666-666666666666"
 
 # --- Common ---------------------------------------------------------------
 # subscription_id       = "00000000-0000-0000-0000-000000000000" # or ARM_SUBSCRIPTION_ID
@@ -26,7 +27,7 @@ production_subscription_id      = "55555555-5555-5555-5555-555555555555"
 #       { name = "Allow-HTTPS-From-Hub", priority = 300, source_address_prefixes = ["10.145.0.0/24"], destination_port_ranges = ["443"] },
 #     ]
 #   }
-#   avd = { address_space = "10.145.3.0/24" } # subscription defaults to "connectivity"
+#   avd = { address_space = "10.145.3.0/24", subscription = "avd" } # omit subscription for "connectivity"
 # }
 
 # --- Identity (tier-0) -----------------------------------------------------

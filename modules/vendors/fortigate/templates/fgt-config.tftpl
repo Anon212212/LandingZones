@@ -1,0 +1,99 @@
+config system global
+    set hostname "${hostname}"
+    set admintimeout 30
+end
+config system interface
+    edit "port1"
+        set alias "untrust"
+        set mode static
+        set ip ${untrust_ip} ${untrust_mask}
+        set allowaccess ping probe-response
+    next
+    edit "port2"
+        set alias "trust"
+        set mode static
+        set ip ${trust_ip} ${trust_mask}
+        set allowaccess ping probe-response
+    next
+%{ if ha ~}
+    edit "port3"
+        set alias "hasync"
+        set mode static
+        set ip ${hasync_ip} ${hasync_mask}
+        set allowaccess ping
+    next
+%{ endif ~}
+    edit "${mgmt_port}"
+        set alias "mgmt"
+        set mode static
+        set ip ${mgmt_ip} ${mgmt_mask}
+        set allowaccess ping https ssh
+    next
+end
+config system probe-response
+    set mode http-probe
+    set http-probe-value "OK"
+    set port ${probe_port}
+end
+config router static
+    edit 1
+        set device "port1"
+        set gateway ${untrust_gw}
+    next
+    edit 2
+        set dst 168.63.129.16 255.255.255.255
+        set device "port2"
+        set gateway ${trust_gw}
+    next
+%{ for i, cidr in internal_cidrs ~}
+    edit ${i + 10}
+        set dst ${cidr}
+        set device "port2"
+        set gateway ${trust_gw}
+    next
+%{ endfor ~}
+end
+%{ if ha ~}
+config system ha
+    set group-name "${cluster_name}"
+    set mode a-p
+    set hbdev "port3" 100
+    set session-pickup enable
+    set session-pickup-connectionless enable
+    set ha-mgmt-status enable
+    config ha-mgmt-interfaces
+        edit 1
+            set interface "${mgmt_port}"
+            set gateway ${mgmt_gw}
+        next
+    end
+    set override disable
+    set priority ${priority}
+    set unicast-hb enable
+    set unicast-hb-peerip ${peer_hasync_ip}
+end
+config system sdn-connector
+    edit "azure-ha"
+        set type azure
+        set ha-status enable
+        set use-metadata-iam enable
+        config nic
+            edit "${untrust_nic_name}"
+                config ip
+                    edit "${vip_ip_config_name}"
+                        set public-ip "${cluster_public_ip_name}"
+                    next
+                end
+            next
+            edit "${trust_nic_name}"
+                config ip
+                    edit "${vip_ip_config_name}"
+                        set private-ip ${trust_vip}
+                    next
+                end
+            next
+        end
+    next
+end
+%{ endif ~}
+${extra_config}

@@ -117,3 +117,16 @@ provider "azurerm" {
     }
   }
 }
+
+provider "azurerm" {
+  alias           = "avd"
+  subscription_id = var.avd_subscription_id != null ? var.avd_subscription_id : var.subscription_id
+
+  storage_use_azuread = true
+
+  features {
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
+}

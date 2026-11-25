@@ -19,6 +19,7 @@ def cfg() -> LandingZoneConfig:
         identity_subscription_id="11111111-1111-1111-1111-111111111111",
         shared_services_subscription_id="44444444-4444-4444-4444-444444444444",
         production_subscription_id="55555555-5555-5555-5555-555555555555",
+        avd_subscription_id="66666666-6666-6666-6666-666666666666",
         nva_admin_ssh_public_key=VALID_KEY,
     )
     c.derive_addresses()
