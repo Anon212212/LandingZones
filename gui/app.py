@@ -31,6 +31,7 @@ SUBSCRIPTION_FIELDS = [
     ("identity_subscription_id", "Identity (tier-0) subscription"),
     ("shared_services_subscription_id", "Shared services subscription"),
     ("production_subscription_id", "Production subscription"),
+    ("avd_subscription_id", "Azure Virtual Desktop subscription"),
 ]
 ZONES = ["1", "2", "3"]
 REGION_OPTIONS = {k: f"{r.display}  ·  {k}" for k, r in REGIONS.items()}
@@ -484,10 +485,11 @@ class Designer:
                 ui.input(f"{label} ID", placeholder="00000000-0000-0000-0000-000000000000") \
                     .bind_value(c, fld).on_value_change(self.changed).props("outlined dense").classes("w-full")
             ui.label("Sign in to Azure (top right) to pick subscriptions from your tenant.").classes("lz-hint")
-        used = {t: ", ".join(sp.key for sp in c.spokes if sp.subscription == t) for t in ("shared", "prod")}
+        used = {t: ", ".join(sp.key for sp in c.spokes if sp.subscription == t) for t in ("shared", "prod", "avd")}
         ui.label("Landing-zone subscriptions host workload spokes: "
-                 f"shared services → {used['shared'] or 'no spokes yet'}; production → {used['prod'] or 'no spokes yet'}. "
-                 "Choose each spoke's subscription on the Network tab.").classes("lz-hint")
+                 f"shared services → {used['shared'] or 'no spokes yet'}; production → {used['prod'] or 'no spokes yet'}; "
+                 f"AVD → {used['avd'] or 'no spokes yet'}. Choose each spoke's subscription on the Network tab.") \
+            .classes("lz-hint")
 
     @ui.refreshable
     def account_view(self) -> None:

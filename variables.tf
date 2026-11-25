@@ -86,9 +86,9 @@ variable "shared_services_subscription_id" {
 
   validation {
     condition = var.shared_services_subscription_id == null || !contains(
-      [for x in [var.subscription_id, var.identity_subscription_id, var.production_subscription_id] : lower(x) if x != null],
+      [for x in [var.subscription_id, var.identity_subscription_id, var.production_subscription_id, var.avd_subscription_id] : lower(x) if x != null],
     lower(coalesce(var.shared_services_subscription_id, "-")))
-    error_message = "The shared-services subscription must be its own subscription (not connectivity, identity or production)."
+    error_message = "The shared-services subscription must be its own subscription (not connectivity, identity, production or AVD)."
   }
 }
 
@@ -109,9 +109,32 @@ variable "production_subscription_id" {
 
   validation {
     condition = var.production_subscription_id == null || !contains(
-      [for x in [var.subscription_id, var.identity_subscription_id] : lower(x) if x != null],
+      [for x in [var.subscription_id, var.identity_subscription_id, var.avd_subscription_id] : lower(x) if x != null],
     lower(coalesce(var.production_subscription_id, "-")))
-    error_message = "The production subscription must be its own subscription (not connectivity or identity)."
+    error_message = "The production subscription must be its own subscription (not connectivity, identity or AVD)."
+  }
+}
+
+variable "avd_subscription_id" {
+  description = "[Security] Landing-zone subscription for Azure Virtual Desktop spokes (subscription = \"avd\"). Required when any spoke uses it."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.avd_subscription_id == null || can(regex("^[0-9a-fA-F-]{36}$", var.avd_subscription_id))
+    error_message = "avd_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.avd_subscription_id != null || !anytrue([for s in values(var.spokes) : s.subscription == "avd"])
+    error_message = "A spoke uses subscription = \"avd\" – set avd_subscription_id."
+  }
+
+  validation {
+    condition = var.avd_subscription_id == null || !contains(
+      [for x in [var.subscription_id, var.identity_subscription_id] : lower(x) if x != null],
+    lower(coalesce(var.avd_subscription_id, "-")))
+    error_message = "The AVD subscription must be its own subscription (not connectivity or identity)."
   }
 }
 
@@ -120,8 +143,9 @@ variable "spokes" {
     Workload spokes, keyed by a short name used in resource names. Each spoke
     gets its own resource group, VNet (one subnet spanning it), NSG, route
     table to the NVAs and hub peering, in the subscription named by
-    `subscription`: "connectivity", "shared" (shared_services_subscription_id)
-    or "prod" (production_subscription_id). nsg_rules are added to the
+    `subscription`: "connectivity", "shared" (shared_services_subscription_id),
+    "prod" (production_subscription_id) or "avd" (avd_subscription_id).
+    nsg_rules are added to the
     baseline NSG (Bastion + VNet in, AzureLoadBalancer, deny-all) and must use
     priorities 300-3900.
   EOT
@@ -142,12 +166,12 @@ variable "spokes" {
   default = {
     shared = { address_space = "10.145.1.0/24", subscription = "shared", subnet_name = "snet-shared-app" }
     prod   = { address_space = "10.145.2.0/24", subscription = "prod", subnet_name = "snet-prod-app" }
-    avd    = { address_space = "10.145.3.0/24", subscription = "connectivity", subnet_name = "snet-avd-sessionhosts" }
+    avd    = { address_space = "10.145.3.0/24", subscription = "avd", subnet_name = "snet-avd-sessionhosts" }
   }
 
   validation {
-    condition     = alltrue([for s in values(var.spokes) : contains(["connectivity", "shared", "prod"], s.subscription)])
-    error_message = "Spoke subscription must be connectivity, shared or prod."
+    condition     = alltrue([for s in values(var.spokes) : contains(["connectivity", "shared", "prod", "avd"], s.subscription)])
+    error_message = "Spoke subscription must be connectivity, shared, prod or avd."
   }
 
   validation {

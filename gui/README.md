@@ -47,8 +47,8 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 
 ## Workflow
 
-1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, and the four subscriptions: connectivity, identity, shared services and production.
-2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, choose each spoke's **subscription** (connectivity, shared services or production), and give each one NSG rules. Choose NAT Gateway egress.
+1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, and the five subscriptions: connectivity, identity, shared services, production and AVD.
+2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, choose each spoke's **subscription** (connectivity, shared services, production or AVD), and give each one NSG rules. Choose NAT Gateway egress.
 3. **Resilience**: Standard / High / Maximum, or fine-tune zones, NVA size and delete locks.
 4. **Identity**: identity regions and DC zones, DC size and image, backup redundancy, tier-0 access and Key Vault firewall.
 5. **Security**: NVA SSH key, Bastion SKU, encryption at host, DDoS plan.
@@ -60,7 +60,7 @@ Alongside the diagram:
 
 - **Estimated monthly cost** breaks the total down by category and separates fixed from usage-based charges. Expand it for the line items and the usage assumptions. It shows euro by default. Press ⟳ to load live VM prices from `prices.azure.com` (EUR, or switch to USD or GBP). Offline, it shows the bundled EUR baseline.
 - **Pre-flight checks** (after *Sign in to Azure*) use your Azure CLI session, a browser sign-in or a device code. Only Reader-level calls are made, and the designer stores no tokens. The checks are:
-  - all four subscriptions exist and are enabled,
+  - all five subscriptions exist and are enabled,
   - you hold deploy permissions (Owner, or Contributor + User Access Administrator),
   - no **overlap with existing VNets**,
   - a Network Watcher exists per region,

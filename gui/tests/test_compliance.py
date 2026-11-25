@@ -47,3 +47,9 @@ def test_report_contains_disclaimer_and_frameworks(cfg):
     cfg.frameworks = ["WAF", "NIS2", "DORA"]
     md = c.report_markdown(cfg)
     assert c.DISCLAIMER in md and "| NIS2 |" in md and "Art. 21(2)(c)" in md
+
+
+def test_default_spokes_all_in_landing_zone_subscriptions(cfg):
+    assert by_id(c.evaluate(cfg))["SEC-17"].status == c.PASS
+    cfg.spokes[2].subscription = "connectivity"
+    assert by_id(c.evaluate(cfg))["SEC-17"].status == c.WARN

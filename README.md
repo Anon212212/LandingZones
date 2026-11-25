@@ -4,16 +4,17 @@ Terraform for an Azure **hub & spoke** network with a **highly available NVA pai
 
 ➡️ **[Well-Architected alignment, pillar by pillar](docs/well-architected.md)** · **[Identity (tier-0) design & runbook](docs/identity.md)**
 
-Four subscriptions, following the Azure landing zone pattern:
+Five subscriptions, following the Azure landing zone pattern:
 
 | Subscription | Contents |
 |---|---|
-| Connectivity | Hub, HA NVAs, Bastion, NAT Gateway, platform monitoring, and any spokes you keep there (AVD by default) |
+| Connectivity | Hub, HA NVAs, Bastion, NAT Gateway, platform monitoring (and any spoke you explicitly keep there) |
 | Identity (tier-0) | Domain controllers in two regions × two zones, a Recovery Services vault per region, tier-0 Key Vault and Log Analytics |
 | Shared services (landing zone) | The `shared` spoke: its own resource group, VNet, NSG and route table, peered to the hub |
 | Production (landing zone) | The `prod` spoke, as above |
+| Azure Virtual Desktop (landing zone) | The `avd` spoke, as above |
 
-Each spoke's `subscription` (`connectivity`, `shared` or `prod`) decides where it's deployed.
+Each spoke's `subscription` (`connectivity`, `shared`, `prod` or `avd`) decides where it's deployed.
 
 ---
 
@@ -37,7 +38,7 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 | | | `AzureBastionSubnet` | `.96/27` | bastion (Microsoft rule set) |
 | shared (shared-services sub) | `10.145.1.0/24` | `snet-shared-app` | `/24` | spoke baseline |
 | prod (production sub) | `10.145.2.0/24` | `snet-prod-app` | `/24` | spoke baseline |
-| avd (connectivity sub) | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
+| avd (AVD sub) | `10.145.3.0/24` | `snet-avd-sessionhosts` | `/24` | spoke baseline |
 | identity (primary, identity sub) | `10.145.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 | identity (secondary, identity sub) | `10.146.4.0/24` | `snet-dc` | `/27` | AD DS (landing-zone CIDRs only) |
 
@@ -81,7 +82,7 @@ See [gui/README.md](gui/README.md) for a screen-by-screen walkthrough.
 
 ## Usage
 
-Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and four subscriptions in the same tenant: connectivity, identity, shared services and production. The deploying identity needs Owner (or Contributor + User Access Administrator) on all of them, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
+Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and five subscriptions in the same tenant: connectivity, identity, shared services, production and AVD. The deploying identity needs Owner (or Contributor + User Access Administrator) on all of them, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
 
 ```bash
 cp terraform.tfvars.example terraform.tfvars   # set org_prefix, owner, cost_center, SSH key, identity_subscription_id
@@ -123,7 +124,7 @@ To set it up:
 1. **Bootstrap once** as an admin. This creates the state storage account (ZRS, Entra ID auth only, versioning, soft delete, delete lock) and both identities with their federated credentials. The designer's Export tab fills in this command for you. Add `--dry-run` to preview it.
 
    ```bash
-   ./scripts/bootstrap.sh --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --landing-zone-sub <shared-guid> --landing-zone-sub <prod-guid> --github-repo OWNER/REPO --environment production
+   ./scripts/bootstrap.sh --location northeurope --state-rg rg-contoso-tfstate-prod-neu --state-account stcontosotfstate01 --connectivity-sub <guid> --identity-sub <guid> --landing-zone-sub <shared-guid> --landing-zone-sub <prod-guid> --landing-zone-sub <avd-guid> --github-repo OWNER/REPO --environment production
    ```
 
 2. **Set the repository variables** the script prints (Settings → Secrets and variables → Actions → *Variables*), and add required reviewers to the `production` environment.
@@ -145,8 +146,8 @@ terraform test
 | Variable | Default | Notes |
 |---|---|---|
 | `org_prefix` | — | **Required.** 2–15 lowercase chars. |
-| `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, `subscription` (`connectivity` / `shared` / `prod`), optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
-| `shared_services_subscription_id` / `production_subscription_id` | — | **Required** when a spoke targets them. Must differ from each other, connectivity and identity. |
+| `spokes` | shared / prod / avd (`10.145.1-3.0/24`) | Map of workload spokes: `address_space`, `subscription` (`connectivity` / `shared` / `prod` / `avd`), optional `subnet_name`, optional `nsg_rules` (priority 300–3900, no Internet inbound). |
+| `shared_services_subscription_id` / `production_subscription_id` / `avd_subscription_id` | — | **Required** when a spoke targets them. Must differ from each other, connectivity and identity. |
 | `owner`, `cost_center` | — | **Required.** Mandatory tags. |
 | `nva_admin_ssh_public_key` | — | **Required.** |
 | `subscription_id` | `null` | Connectivity subscription. Falls back to `ARM_SUBSCRIPTION_ID`. |

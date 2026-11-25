@@ -78,5 +78,12 @@ def test_landing_zone_subscriptions_required_and_distinct(cfg):
 def test_unused_landing_zone_subscription_is_optional(cfg):
     for sp in cfg.spokes:
         sp.subscription = "connectivity"
-    cfg.shared_services_subscription_id = cfg.production_subscription_id = ""
+    cfg.shared_services_subscription_id = cfg.production_subscription_id = cfg.avd_subscription_id = ""
     assert validate(cfg) == []
+
+
+def test_avd_needs_its_own_subscription(cfg):
+    cfg.avd_subscription_id = cfg.production_subscription_id
+    assert any("must be different" in i.message for i in validate(cfg))
+    cfg.avd_subscription_id = ""
+    assert "avd_subscription_id" in fields(validate(cfg))

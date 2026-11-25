@@ -44,11 +44,16 @@ mock_provider "azurerm" {
   alias = "prod"
 }
 
+mock_provider "azurerm" {
+  alias = "avd"
+}
+
 variables {
   subscription_id                 = "00000000-0000-0000-0000-000000000000"
   identity_subscription_id        = "11111111-1111-1111-1111-111111111111"
   shared_services_subscription_id = "44444444-4444-4444-4444-444444444444"
   production_subscription_id      = "55555555-5555-5555-5555-555555555555"
+  avd_subscription_id             = "66666666-6666-6666-6666-666666666666"
   org_prefix                      = "contoso"
   owner                           = "platform-team"
   cost_center                     = "cc-1234"
@@ -319,8 +324,8 @@ run "spokes_land_in_their_own_subscriptions" {
   command = plan
 
   assert {
-    condition     = keys(module.spokes_shared) == ["shared"] && keys(module.spokes_prod) == ["prod"] && keys(module.spokes_connectivity) == ["avd"]
-    error_message = "Shared services and production spokes must be deployed to their own subscriptions."
+    condition     = keys(module.spokes_shared) == ["shared"] && keys(module.spokes_prod) == ["prod"] && keys(module.spokes_avd) == ["avd"] && length(module.spokes_connectivity) == 0
+    error_message = "Shared services, production and AVD spokes must be deployed to their own subscriptions."
   }
 
   assert {
@@ -347,4 +352,14 @@ run "rejects_landing_zone_reusing_identity_subscription" {
   }
 
   expect_failures = [var.shared_services_subscription_id]
+}
+
+run "rejects_avd_sharing_production_subscription" {
+  command = plan
+
+  variables {
+    avd_subscription_id = "55555555-5555-5555-5555-555555555555"
+  }
+
+  expect_failures = [var.production_subscription_id]
 }
