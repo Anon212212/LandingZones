@@ -36,6 +36,14 @@ mock_provider "azurerm" {
   }
 }
 
+mock_provider "azurerm" {
+  alias = "shared"
+}
+
+mock_provider "azurerm" {
+  alias = "prod"
+}
+
 run "designer_tfvars_plan" {
   command = plan
 

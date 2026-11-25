@@ -4,6 +4,7 @@
 crash.log
 crash.*.log
 *.tfvars
+!environments/*.tfvars
 *.tfvars.json
 !*.tfvars.example
 override.tf

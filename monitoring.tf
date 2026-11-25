@@ -13,7 +13,6 @@ locals {
       nsg_mgmt    = { id = azurerm_network_security_group.mgmt.id, logs = true, metrics = false }
       nsg_bastion = { id = azurerm_network_security_group.bastion.id, logs = true, metrics = false }
     },
-    { for k, v in azurerm_network_security_group.spoke : "nsg_${k}" => { id = v.id, logs = true, metrics = false } },
     { for k, id in local.all_vnet_ids : "vnet_${k}" => { id = id, logs = true, metrics = true } },
     var.enable_nat_gateway ? {
       nat     = { id = azurerm_nat_gateway.nva[0].id, logs = false, metrics = true }

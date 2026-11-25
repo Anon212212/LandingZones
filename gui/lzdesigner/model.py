@@ -15,6 +15,46 @@ from .catalog import REGIONS, RESILIENCE_PRESETS
 
 FRAMEWORKS = ("WAF", "NIS2", "DORA")
 
+# Where a spoke can live: Terraform's spokes[*].subscription values.
+SPOKE_SUBSCRIPTIONS = {
+    "connectivity": "Connectivity",
+    "shared": "Shared services",
+    "prod": "Production",
+}
+
+
+@dataclass
+class NsgRule:
+    name: str
+    priority: int
+    source_address_prefixes: list[str]
+    destination_port_ranges: list[str]
+    direction: str = "Inbound"
+    access: str = "Allow"
+    protocol: str = "Tcp"
+
+
+@dataclass
+class Spoke:
+    key: str
+    address_space: str
+    subnet_name: str = ""
+    nsg_rules: list[NsgRule] = field(default_factory=list)
+    description: str = ""          # designer only – shown in the diagram
+    subscription: str = "connectivity"   # connectivity | shared | prod
+
+    @property
+    def effective_subnet_name(self) -> str:
+        return self.subnet_name or f"snet-{self.key}"
+
+
+def default_spokes() -> list[Spoke]:
+    return [
+        Spoke("shared", "10.145.1.0/24", "snet-shared-app", description="Shared services", subscription="shared"),
+        Spoke("prod", "10.145.2.0/24", "snet-prod-app", description="Production", subscription="prod"),
+        Spoke("avd", "10.145.3.0/24", "snet-avd-sessionhosts", description="Azure Virtual Desktop"),
+    ]
+
 
 @dataclass
 class IdentityRegion:
@@ -37,6 +77,8 @@ class LandingZoneConfig:
     # --- subscriptions / access -----------------------------------------
     subscription_id: str = ""
     identity_subscription_id: str = ""
+    shared_services_subscription_id: str = ""
+    production_subscription_id: str = ""
     nva_admin_username: str = "nvaadmin"
     nva_admin_ssh_public_key: str = ""
 
@@ -44,9 +86,7 @@ class LandingZoneConfig:
     network_base: str = "10.145.0.0/16"    # designer helper
     auto_addressing: bool = True             # derive every CIDR from network_base
     hub_address_space: str = "10.145.0.0/24"
-    spoke_address_space: str = "10.145.1.0/24"
-    prod_address_space: str = "10.145.2.0/24"
-    avd_address_space: str = "10.145.3.0/24"
+    spokes: list[Spoke] = field(default_factory=default_spokes)
     enable_nat_gateway: bool = True
     nva_mgmt_source_cidrs: list[str] = field(default_factory=list)
 
@@ -92,6 +132,12 @@ class LandingZoneConfig:
     # --- compliance (designer helper) ---------------------------------------
     frameworks: list[str] = field(default_factory=lambda: ["WAF"])
 
+    # --- deployment pipeline (designer helper) ------------------------------
+    github_repo: str = ""                    # OWNER/REPO
+    github_environment: str = "production"   # protected GitHub environment = tfvars file name
+    state_resource_group: str = ""           # blank → derived
+    state_storage_account: str = ""          # blank → derived
+
     # ------------------------------------------------------------------ helpers
     @property
     def region(self):
@@ -100,8 +146,8 @@ class LandingZoneConfig:
     def derive_addresses(self) -> None:
         """Lay out every address space from `network_base` (a /16).
 
-        hub .0/24 · shared .1/24 · prod .2/24 · avd .3/24 · identity .4/24,
-        and each additional identity region takes the next /16.
+        hub .0/24 · spokes .1, .2, .3, .5, .6 … /24 · primary identity .4/24,
+        and each additional identity region takes .4/24 of the next /16.
         """
         try:
             base = ipaddress.IPv4Network(self.network_base, strict=False)
@@ -117,9 +163,9 @@ class LandingZoneConfig:
             return f"{p[0]}.{p[1]}.{third}.0/24"
 
         self.hub_address_space = net(0)
-        self.spoke_address_space = net(1)
-        self.prod_address_space = net(2)
-        self.avd_address_space = net(3)
+        octets = (o for o in range(1, 256) if o != 4)
+        for spoke in self.spokes:
+            spoke.address_space = net(next(octets))
         for i, r in enumerate(self.identity_regions):
             region_base = ipaddress.IPv4Network((int(base.network_address) + i * 65536, 16))
             r.address_space = net(4, region_base)
@@ -171,13 +217,26 @@ class LandingZoneConfig:
             if self.auto_addressing:
                 self.derive_addresses()
 
+    def add_spoke(self, key: str | None = None) -> Spoke:
+        used = {s.key for s in self.spokes}
+        n = len(self.spokes) + 1
+        while not key or key in used:
+            key, n = f"spoke{n}", n + 1
+        spoke = Spoke(key, "")
+        self.spokes.append(spoke)
+        if self.auto_addressing:
+            self.derive_addresses()
+        return spoke
+
+    def remove_spoke(self, key: str) -> None:
+        self.spokes = [s for s in self.spokes if s.key != key]
+        if self.auto_addressing:
+            self.derive_addresses()
+
     def all_address_spaces(self) -> dict[str, str]:
-        spaces = {
-            "hub": self.hub_address_space,
-            "shared": self.spoke_address_space,
-            "prod": self.prod_address_space,
-            "avd": self.avd_address_space,
-        }
+        spaces = {"hub": self.hub_address_space}
+        for s in self.spokes:
+            spaces[f"spoke-{s.key}"] = s.address_space
         for r in self.identity_regions:
             spaces[f"identity-{r.key}"] = r.address_space
         return spaces
@@ -223,6 +282,32 @@ class LandingZoneConfig:
         base = ipaddress.IPv4Network(sn).network_address
         return [str(base + 4 + i) for i in range(len(region.dc_zones))]
 
+    def subscription_for(self, target: str) -> str:
+        return {"connectivity": self.subscription_id, "shared": self.shared_services_subscription_id,
+                "prod": self.production_subscription_id}.get(target, "")
+
+    def used_spoke_subscriptions(self) -> list[str]:
+        return [t for t in SPOKE_SUBSCRIPTIONS if t != "connectivity" and any(s.subscription == t for s in self.spokes)]
+
+    # ------------------------------------------------------------------ pipeline
+    def state_names(self) -> tuple[str, str]:
+        import hashlib
+        short = self.region.short if self.region else self.location
+        rg = self.state_resource_group or f"rg-{self.org_prefix}-tfstate-{self.environment}-{short}"
+        digest = hashlib.md5(f"{self.subscription_id}{self.org_prefix}{self.environment}".encode()).hexdigest()[:6]
+        sa = self.state_storage_account or f"st{self.org_prefix.replace('-', '')[:12]}tfst{digest}"[:24]
+        return rg, sa
+
+    def bootstrap_command(self) -> str:
+        rg, sa = self.state_names()
+        return (f"./scripts/bootstrap.sh \\\n  --location {self.location} \\\n  --state-rg {rg} \\\n"
+                f"  --state-account {sa} \\\n  --connectivity-sub {self.subscription_id or '<connectivity-sub>'} \\\n"
+                f"  --identity-sub {self.identity_subscription_id or '<identity-sub>'} \\\n"
+                + "".join(f"  --landing-zone-sub {self.subscription_for(t) or '<' + t + '-sub>'} \\\n"
+                          for t in self.used_spoke_subscriptions()) +
+                f"  --github-repo {self.github_repo or '<owner/repo>'} \\\n  --environment {self.github_environment} \\\n"
+                f"  --name-prefix {self.org_prefix}-lz-{self.environment}")
+
     # ------------------------------------------------------------------ persistence
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2)
@@ -233,7 +318,10 @@ class LandingZoneConfig:
         known = {f.name for f in fields(cls)}
         data = {k: v for k, v in data.items() if k in known}
         regions = [IdentityRegion(**r) for r in data.pop("identity_regions", [])]
+        spokes = data.pop("spokes", None)
         cfg = cls(**data)
         if regions:
             cfg.identity_regions = regions
+        if spokes is not None:
+            cfg.spokes = [Spoke(**{**sp, "nsg_rules": [NsgRule(**r) for r in sp.get("nsg_rules", [])]}) for sp in spokes]
         return cfg

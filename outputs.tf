@@ -11,12 +11,17 @@ output "hub_vnet_id" {
 
 output "spoke_vnet_ids" {
   description = "Spoke VNet IDs keyed by spoke name."
-  value       = { for k, v in azurerm_virtual_network.spoke : k => v.id }
+  value       = { for k, v in local.spoke_modules : k => v.vnet_id }
 }
 
 output "spoke_subnet_ids" {
   description = "Workload subnet IDs keyed by spoke name."
-  value       = { for k, v in azurerm_subnet.spoke : k => v.id }
+  value       = { for k, v in local.spoke_modules : k => v.subnet_id }
+}
+
+output "spoke_subscriptions" {
+  description = "Which subscription each spoke is deployed to."
+  value       = { for k, v in local.spokes : k => v.subscription }
 }
 
 output "hub_subnet_ids" {

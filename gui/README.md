@@ -7,7 +7,11 @@ A simple front end for this landing zone. Users pick options from dropdowns, swi
 - **draws the architecture live**: NVAs, DCs, regions, zones and IPs follow the choices,
 - **validates every input** with the same rules as the Terraform variables (plus overlap and region checks Terraform can't express),
 - **enforces the compliance baseline** for the frameworks you switch on (WAF always, plus NIS2 and DORA), locking the settings they require,
-- **writes `terraform.tfvars`** for the Terraform in the repo root, and exports the diagram (editable draw.io), a compliance report and a re-openable project file.
+- **writes `terraform.tfvars`** for the Terraform in the repo root, and exports the diagram (editable draw.io), a compliance report and a re-openable project file,
+- **lets you add workload spokes** with their own NSG rules,
+- **estimates the monthly cost in euro** as you choose (bundled EUR baseline, or live prices from the Azure Retail Prices API),
+- **signs in to Azure (optional)** to pick subscriptions and run **pre-flight checks** against your tenant,
+- **prepares the deployment pipeline**: the bootstrap command and `environments/<env>.tfvars` for the approval-gated GitHub Actions workflow.
 
 The complexity stays in the Terraform and the rules engine. The front end only asks for decisions.
 
@@ -29,6 +33,12 @@ Then start the app. It opens http://localhost:8080:
 .venv/bin/python gui/app.py
 ```
 
+To try sign-in and pre-flight without Azure access, start it with a fictional demo tenant:
+
+```bash
+LZDESIGNER_DEMO=1 .venv/bin/python gui/app.py
+```
+
 For a desktop window instead of a browser tab, install `pywebview` and run with `--native`:
 
 ```bash
@@ -37,14 +47,28 @@ For a desktop window instead of a browser tab, install `pywebview` and run with 
 
 ## Workflow
 
-1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, both subscription IDs.
-2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Choose NAT Gateway egress.
+1. **Basics**: org prefix, environment, owner and cost centre (mandatory tags), primary region, and the four subscriptions: connectivity, identity, shared services and production.
+2. **Network**: one base `/16`. Every address space is planned for you (or switch to manual). Add, rename or remove **spokes**, choose each spoke's **subscription** (connectivity, shared services or production), and give each one NSG rules. Choose NAT Gateway egress.
 3. **Resilience**: Standard / High / Maximum, or fine-tune zones, NVA size and delete locks.
 4. **Identity**: identity regions and DC zones, DC size and image, backup redundancy, tier-0 access and Key Vault firewall.
 5. **Security**: NVA SSH key, Bastion SKU, encryption at host, DDoS plan.
 6. **Operations**: alert recipients, log retention, flow logs, budget, CPU scaling signal.
 7. **Compliance**: switch on NIS2 and/or DORA and review every control and its references.
-8. **Export**: write `terraform.tfvars` (and `landingzone.json`) to the repo, or download them, plus the draw.io diagram and the compliance report. Then run `terraform init` and `terraform plan`.
+8. **Export**: write `terraform.tfvars` (and `landingzone.json`) to the repo, or download them, plus the draw.io diagram and the compliance report. For the pipeline, fill in the GitHub repo and environment, write `environments/<env>.tfvars`, and copy the generated `scripts/bootstrap.sh` command.
+
+Alongside the diagram:
+
+- **Estimated monthly cost** breaks the total down by category and separates fixed from usage-based charges. Expand it for the line items and the usage assumptions. It shows euro by default. Press ⟳ to load live VM prices from `prices.azure.com` (EUR, or switch to USD or GBP). Offline, it shows the bundled EUR baseline.
+- **Pre-flight checks** (after *Sign in to Azure*) use your Azure CLI session, a browser sign-in or a device code. Only Reader-level calls are made, and the designer stores no tokens. The checks are:
+  - all four subscriptions exist and are enabled,
+  - you hold deploy permissions (Owner, or Contributor + User Access Administrator),
+  - no **overlap with existing VNets**,
+  - a Network Watcher exists per region,
+  - EncryptionAtHost is registered,
+  - each VM size is available in the chosen zones,
+  - there's enough **vCPU quota**.
+
+  Click a result to jump to the tab that fixes it.
 
 The header shows a score per framework and a **Ready to export** state once there are no input issues and no unmet required controls. *What needs attention* jumps to the tab to fix.
 
@@ -92,11 +116,24 @@ Switch NIS2 and DORA on to see every control with its WAF / NIS2 / DORA referenc
   <img src="../docs/images/designer-export.png" width="49%" alt="Export tab: write terraform.tfvars, downloads and tfvars preview">
 </p>
 
+### Spokes, cost and pre-flight
+
+Spokes are added on the Network tab, each with its own NSG rules. The cost estimate and pre-flight checks sit next to the diagram. Here, pre-flight found an existing VNet that overlaps the `prod` spoke.
+
+![Spokes editor, cost estimate and pre-flight results against a (demo) tenant](../docs/images/designer-azure.png)
+
+<p>
+  <img src="../docs/images/designer-spokes.png" width="49%" alt="NSG rules editor for a spoke">
+  <img src="../docs/images/designer-pipeline.png" width="49%" alt="Export tab: deployment pipeline with generated bootstrap command">
+</p>
+
 ### Live architecture, full size
 
-The diagram follows every choice: here, the High preset with three NVAs and three DCs per region. *Download draw.io* saves an editable copy.
+The diagram follows every choice. The first image shows the High preset with three NVAs and three DCs per region; the second adds a fourth spoke. *Download draw.io* saves an editable copy.
 
 ![Full-size live architecture diagram with NIS2 and DORA badges](../docs/images/designer-diagram.png)
+
+![Full-size diagram with four workload spokes](../docs/images/designer-diagram-spokes.png)
 
 ## How the guardrails work
 
@@ -126,7 +163,10 @@ Examples: DORA locks geo-redundant backups with Cross Region Restore (Art. 12(3)
 | `lzdesigner/compliance.py` | WAF / NIS2 / DORA controls, scoring, enforcement, report |
 | `lzdesigner/diagram.py` | Live SVG + editable draw.io export |
 | `lzdesigner/tfvars.py` | `terraform.tfvars` renderer |
-| `tests/` | pytest suite. `test_terraform_integration.py` plans the generated tfvars with `terraform test` against mocked providers |
+| `lzdesigner/pricing.py` | Cost estimate: bundled baseline + live Azure Retail Prices |
+| `lzdesigner/azure.py` | Optional sign-in (CLI / browser / device code) and read-only pre-flight checks |
+| `lzdesigner/demo.py` | Fictional tenant for demos and UI tests (`LZDESIGNER_DEMO=1`) |
+| `tests/` | pytest suite: pre-flight against a fake tenant, pricing incl. a mocked Retail API, the bootstrap script in dry-run, and `test_terraform_integration.py`, which plans the generated tfvars with `terraform test` against mocked providers |
 
 ## Tests
 

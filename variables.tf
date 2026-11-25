@@ -69,36 +69,118 @@ variable "hub_address_space" {
   }
 }
 
-variable "spoke_address_space" {
-  description = "Shared-services spoke VNet CIDR."
+variable "shared_services_subscription_id" {
+  description = "[Security] Landing-zone subscription for shared-services spokes (subscription = \"shared\"). Required when any spoke uses it."
   type        = string
-  default     = "10.145.1.0/24"
+  default     = null
 
   validation {
-    condition     = can(cidrhost(var.spoke_address_space, 0))
-    error_message = "spoke_address_space must be a valid CIDR."
+    condition     = var.shared_services_subscription_id == null || can(regex("^[0-9a-fA-F-]{36}$", var.shared_services_subscription_id))
+    error_message = "shared_services_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.shared_services_subscription_id != null || !anytrue([for s in values(var.spokes) : s.subscription == "shared"])
+    error_message = "A spoke uses subscription = \"shared\" – set shared_services_subscription_id."
+  }
+
+  validation {
+    condition = var.shared_services_subscription_id == null || !contains(
+      [for x in [var.subscription_id, var.identity_subscription_id, var.production_subscription_id] : lower(x) if x != null],
+    lower(coalesce(var.shared_services_subscription_id, "-")))
+    error_message = "The shared-services subscription must be its own subscription (not connectivity, identity or production)."
   }
 }
 
-variable "prod_address_space" {
-  description = "Production spoke VNet CIDR."
+variable "production_subscription_id" {
+  description = "[Security] Landing-zone subscription for production spokes (subscription = \"prod\"). Required when any spoke uses it."
   type        = string
-  default     = "10.145.2.0/24"
+  default     = null
 
   validation {
-    condition     = can(cidrhost(var.prod_address_space, 0))
-    error_message = "prod_address_space must be a valid CIDR."
+    condition     = var.production_subscription_id == null || can(regex("^[0-9a-fA-F-]{36}$", var.production_subscription_id))
+    error_message = "production_subscription_id must be a subscription GUID."
+  }
+
+  validation {
+    condition     = var.production_subscription_id != null || !anytrue([for s in values(var.spokes) : s.subscription == "prod"])
+    error_message = "A spoke uses subscription = \"prod\" – set production_subscription_id."
+  }
+
+  validation {
+    condition = var.production_subscription_id == null || !contains(
+      [for x in [var.subscription_id, var.identity_subscription_id] : lower(x) if x != null],
+    lower(coalesce(var.production_subscription_id, "-")))
+    error_message = "The production subscription must be its own subscription (not connectivity or identity)."
   }
 }
 
-variable "avd_address_space" {
-  description = "Azure Virtual Desktop spoke VNet CIDR."
-  type        = string
-  default     = "10.145.3.0/24"
+variable "spokes" {
+  description = <<-EOT
+    Workload spokes, keyed by a short name used in resource names. Each spoke
+    gets its own resource group, VNet (one subnet spanning it), NSG, route
+    table to the NVAs and hub peering, in the subscription named by
+    `subscription`: "connectivity", "shared" (shared_services_subscription_id)
+    or "prod" (production_subscription_id). nsg_rules are added to the
+    baseline NSG (Bastion + VNet in, AzureLoadBalancer, deny-all) and must use
+    priorities 300-3900.
+  EOT
+  type = map(object({
+    address_space = string
+    subscription  = optional(string, "connectivity")
+    subnet_name   = optional(string)
+    nsg_rules = optional(list(object({
+      name                    = string
+      priority                = number
+      direction               = optional(string, "Inbound")
+      access                  = optional(string, "Allow")
+      protocol                = optional(string, "Tcp")
+      source_address_prefixes = list(string)
+      destination_port_ranges = list(string)
+    })), [])
+  }))
+  default = {
+    shared = { address_space = "10.145.1.0/24", subscription = "shared", subnet_name = "snet-shared-app" }
+    prod   = { address_space = "10.145.2.0/24", subscription = "prod", subnet_name = "snet-prod-app" }
+    avd    = { address_space = "10.145.3.0/24", subscription = "connectivity", subnet_name = "snet-avd-sessionhosts" }
+  }
 
   validation {
-    condition     = can(cidrhost(var.avd_address_space, 0))
-    error_message = "avd_address_space must be a valid CIDR."
+    condition     = alltrue([for s in values(var.spokes) : contains(["connectivity", "shared", "prod"], s.subscription)])
+    error_message = "Spoke subscription must be connectivity, shared or prod."
+  }
+
+  validation {
+    condition     = alltrue([for k in keys(var.spokes) : can(regex("^[a-z][a-z0-9]{1,15}$", k))])
+    error_message = "Spoke names must be 2-16 lowercase letters/digits, starting with a letter."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.spokes) : can(cidrhost(s.address_space, 0))])
+    error_message = "Every spoke address_space must be a valid CIDR."
+  }
+
+  validation {
+    condition = alltrue(flatten([for s in values(var.spokes) : [
+      for r in s.nsg_rules : r.priority >= 300 && r.priority <= 3900
+      && contains(["Inbound", "Outbound"], r.direction)
+      && contains(["Allow", "Deny"], r.access)
+      && contains(["Tcp", "Udp", "Icmp", "*"], r.protocol)
+    ]]))
+    error_message = "Spoke NSG rules need priority 300-3900, direction Inbound/Outbound, access Allow/Deny and protocol Tcp/Udp/Icmp/*."
+  }
+
+  validation {
+    condition     = alltrue([for s in values(var.spokes) : length(distinct([for r in s.nsg_rules : "${r.direction}-${r.priority}"])) == length(s.nsg_rules)])
+    error_message = "NSG rule priorities must be unique per direction within a spoke."
+  }
+
+  validation {
+    condition = alltrue(flatten([for s in values(var.spokes) : [
+      for r in s.nsg_rules : r.direction == "Outbound" || r.access == "Deny"
+      || !anytrue([for p in r.source_address_prefixes : contains(["*", "0.0.0.0/0", "Internet", "Any"], p)])
+    ]]))
+    error_message = "[Security] Spoke NSG rules must not allow inbound traffic from the Internet."
   }
 }
 

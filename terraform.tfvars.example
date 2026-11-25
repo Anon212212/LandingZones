@@ -5,12 +5,29 @@ cost_center              = "CC-1234"
 nva_admin_ssh_public_key = "ssh-ed25519 AAAA... you@example"
 identity_subscription_id = "11111111-1111-1111-1111-111111111111" # dedicated tier-0 subscription
 
+# Landing-zone subscriptions for the default shared / prod spokes
+shared_services_subscription_id = "44444444-4444-4444-4444-444444444444"
+production_subscription_id      = "55555555-5555-5555-5555-555555555555"
+
 # --- Common ---------------------------------------------------------------
 # subscription_id       = "00000000-0000-0000-0000-000000000000" # or ARM_SUBSCRIPTION_ID
 # environment           = "prod"
 # location              = "northeurope"
 # alert_email_addresses = ["platform-oncall@contoso.com"]
-# monthly_budget_amount = 1500
+# monthly_budget_amount = 1500 # in the billing currency (EUR)
+
+# --- Spokes ---------------------------------------------------------------
+# spokes = {
+#   shared = { address_space = "10.145.1.0/24", subscription = "shared", subnet_name = "snet-shared-app" }
+#   prod = {
+#     address_space = "10.145.2.0/24"
+#     subscription  = "prod"
+#     nsg_rules = [
+#       { name = "Allow-HTTPS-From-Hub", priority = 300, source_address_prefixes = ["10.145.0.0/24"], destination_port_ranges = ["443"] },
+#     ]
+#   }
+#   avd = { address_space = "10.145.3.0/24" } # subscription defaults to "connectivity"
+# }
 
 # --- Identity (tier-0) -----------------------------------------------------
 # identity_regions = {

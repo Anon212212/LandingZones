@@ -41,9 +41,10 @@ def _key(k: str) -> str:
 
 SECTIONS: list[tuple[str, list[str]]] = [
     ("Organisation", ["org_prefix", "environment", "location", "owner", "cost_center", "tags"]),
-    ("Subscriptions", ["subscription_id", "identity_subscription_id"]),
-    ("Network", ["hub_address_space", "spoke_address_space", "prod_address_space", "avd_address_space",
-                 "enable_nat_gateway", "nva_mgmt_source_cidrs"]),
+    ("Subscriptions", ["subscription_id", "identity_subscription_id", "shared_services_subscription_id",
+                       "production_subscription_id"]),
+    ("Network", ["hub_address_space", "enable_nat_gateway", "nva_mgmt_source_cidrs"]),
+    ("Spokes", ["spokes"]),
     ("Resilience", ["zones", "nva_zones", "enable_resource_locks"]),
     ("NVAs", ["nva_admin_username", "nva_admin_ssh_public_key", "nva_size", "nva_cpu_alert_threshold",
               "nva_encryption_at_host"]),
@@ -66,7 +67,19 @@ def tfvars_values(cfg: LandingZoneConfig) -> dict:
             if n == "identity_regions":
                 v = {r.key: {"location": r.location, "address_space": r.address_space, "dc_zones": r.dc_zones}
                      for r in cfg.identity_regions}
-            if n == "ddos_protection_plan_id" and not v:
+            if n == "spokes":
+                v = {}
+                for sp in cfg.spokes:
+                    item = {"address_space": sp.address_space, "subscription": sp.subscription}
+                    if sp.subnet_name:
+                        item["subnet_name"] = sp.subnet_name
+                    if sp.nsg_rules:
+                        item["nsg_rules"] = [{
+                            "name": r.name, "priority": int(r.priority), "direction": r.direction, "access": r.access,
+                            "protocol": r.protocol, "source_address_prefixes": r.source_address_prefixes,
+                            "destination_port_ranges": r.destination_port_ranges} for r in sp.nsg_rules]
+                    v[sp.key] = item
+            if n in ("ddos_protection_plan_id", "shared_services_subscription_id", "production_subscription_id") and not v:
                 v = None
             values[n] = v
     return values

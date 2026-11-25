@@ -36,15 +36,25 @@ mock_provider "azurerm" {
   }
 }
 
+mock_provider "azurerm" {
+  alias = "shared"
+}
+
+mock_provider "azurerm" {
+  alias = "prod"
+}
+
 variables {
-  subscription_id          = "00000000-0000-0000-0000-000000000000"
-  identity_subscription_id = "11111111-1111-1111-1111-111111111111"
-  org_prefix               = "contoso"
-  owner                    = "platform-team"
-  cost_center              = "cc-1234"
-  nva_admin_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFeCVmPtwa8s2OJxK8oxA3Mnzmw+eIcgY0VvmSuMVUM5 test-only" # random test-only key
-  alert_email_addresses    = ["ops@example.com"]
-  monthly_budget_amount    = 1000
+  subscription_id                 = "00000000-0000-0000-0000-000000000000"
+  identity_subscription_id        = "11111111-1111-1111-1111-111111111111"
+  shared_services_subscription_id = "44444444-4444-4444-4444-444444444444"
+  production_subscription_id      = "55555555-5555-5555-5555-555555555555"
+  org_prefix                      = "contoso"
+  owner                           = "platform-team"
+  cost_center                     = "cc-1234"
+  nva_admin_ssh_public_key        = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFeCVmPtwa8s2OJxK8oxA3Mnzmw+eIcgY0VvmSuMVUM5 test-only" # random test-only key
+  alert_email_addresses           = ["ops@example.com"]
+  monthly_budget_amount           = 1000
 }
 
 run "addressing_is_derived_and_avoids_reserved_ips" {
@@ -61,7 +71,7 @@ run "addressing_is_derived_and_avoids_reserved_ips" {
   }
 
   assert {
-    condition     = alltrue([for r in azurerm_route_table.spoke : one(r.route).next_hop_in_ip_address == "10.145.0.36"])
+    condition     = alltrue([for m in local.spoke_modules : m.next_hop_ip == "10.145.0.36"])
     error_message = "Every spoke must route 0.0.0.0/0 to the ILB frontend."
   }
 }
@@ -104,12 +114,12 @@ run "security_controls" {
   command = plan
 
   assert {
-    condition     = alltrue([for s in concat([azurerm_subnet.hub_nva_external, azurerm_subnet.hub_nva_internal, azurerm_subnet.hub_mgmt], values(azurerm_subnet.spoke)) : s.default_outbound_access_enabled == false])
+    condition     = alltrue([for s in concat([azurerm_subnet.hub_nva_external, azurerm_subnet.hub_nva_internal, azurerm_subnet.hub_mgmt], []) : s.default_outbound_access_enabled == false]) && alltrue([for m in local.spoke_modules : m.default_outbound_access_enabled == false])
     error_message = "All workload subnets must be private (no default outbound access)."
   }
 
   assert {
-    condition     = length(azurerm_subnet_network_security_group_association.spoke) == 3
+    condition     = length(local.spoke_modules) == length(var.spokes) && alltrue([for m in local.spoke_modules : contains(m.nsg_rule_names, "Deny-All-Inbound")])
     error_message = "Every workload spoke subnet needs an NSG (identity has its own)."
   }
 
@@ -143,13 +153,13 @@ run "operational_excellence_controls" {
   command = plan
 
   assert {
-    condition     = length(azurerm_network_watcher_flow_log.vnet) == 4 && alltrue([for m in module.identity : length(m.dc_ips) > 0])
-    error_message = "Hub and all three workload spokes need VNet flow logs."
+    condition     = length(azurerm_network_watcher_flow_log.vnet) == 1 && alltrue([for m in local.spoke_modules : m.flow_log_enabled]) && alltrue([for m in module.identity : length(m.dc_ips) > 0])
+    error_message = "The hub and every workload spoke need VNet flow logs."
   }
 
   assert {
-    condition     = length(azurerm_monitor_diagnostic_setting.platform) >= 15
-    error_message = "Diagnostic settings are missing for platform resources."
+    condition     = length(azurerm_monitor_diagnostic_setting.platform) >= 9
+    error_message = "Diagnostic settings are missing for platform resources (spokes add theirs in modules/spoke)."
   }
 
   assert {
@@ -270,4 +280,71 @@ run "rejects_single_region_identity" {
   }
 
   expect_failures = [var.identity_regions]
+}
+
+run "custom_spokes_and_rules" {
+  command = plan
+
+  variables {
+    spokes = {
+      web  = { address_space = "10.145.1.0/24", nsg_rules = [{ name = "Allow-HTTPS-From-Hub", priority = 300, source_address_prefixes = ["10.145.0.0/24"], destination_port_ranges = ["443"] }] }
+      data = { address_space = "10.145.2.0/24" }
+    }
+  }
+
+  assert {
+    condition     = length(local.spoke_modules) == 2 && module.spokes_connectivity["data"].subnet_name == "snet-data"
+    error_message = "Spokes must follow var.spokes (default subnet name snet-<key>)."
+  }
+
+  assert {
+    condition     = contains(module.spokes_connectivity["web"].nsg_rule_names, "Allow-HTTPS-From-Hub")
+    error_message = "Custom NSG rules must be added to the spoke NSG."
+  }
+}
+
+run "rejects_internet_inbound_spoke_rule" {
+  command = plan
+
+  variables {
+    spokes = {
+      web = { address_space = "10.145.1.0/24", nsg_rules = [{ name = "Bad", priority = 300, source_address_prefixes = ["0.0.0.0/0"], destination_port_ranges = ["443"] }] }
+    }
+  }
+
+  expect_failures = [var.spokes]
+}
+
+run "spokes_land_in_their_own_subscriptions" {
+  command = plan
+
+  assert {
+    condition     = keys(module.spokes_shared) == ["shared"] && keys(module.spokes_prod) == ["prod"] && keys(module.spokes_connectivity) == ["avd"]
+    error_message = "Shared services and production spokes must be deployed to their own subscriptions."
+  }
+
+  assert {
+    condition     = length(azurerm_virtual_network_peering.hub_to_spoke) == 3
+    error_message = "The hub must peer with every spoke, whichever subscription it is in."
+  }
+}
+
+run "rejects_spoke_in_unset_subscription" {
+  command = plan
+
+  variables {
+    production_subscription_id = null
+  }
+
+  expect_failures = [var.production_subscription_id]
+}
+
+run "rejects_landing_zone_reusing_identity_subscription" {
+  command = plan
+
+  variables {
+    shared_services_subscription_id = "11111111-1111-1111-1111-111111111111"
+  }
+
+  expect_failures = [var.shared_services_subscription_id]
 }

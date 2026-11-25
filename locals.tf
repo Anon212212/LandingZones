@@ -85,22 +85,22 @@ locals {
   # generated from this map.
   #############################################
   spokes = {
-    shared = {
-      address_space = var.spoke_address_space
-      subnet_name   = "snet-shared-app"
-      subnet_prefix = var.spoke_address_space
-    }
-    prod = {
-      address_space = var.prod_address_space
-      subnet_name   = "snet-prod-app"
-      subnet_prefix = var.prod_address_space
-    }
-    avd = {
-      address_space = var.avd_address_space
-      subnet_name   = "snet-avd-sessionhosts"
-      subnet_prefix = var.avd_address_space
+    for k, v in var.spokes : k => {
+      address_space = v.address_space
+      subscription  = v.subscription
+      subnet_name   = coalesce(v.subnet_name, "snet-${k}")
+      subnet_prefix = v.address_space
+      nsg_rules     = v.nsg_rules
     }
   }
+
+  spokes_by_subscription = {
+    for target in ["connectivity", "shared", "prod"] :
+    target => { for k, v in local.spokes : k => v if v.subscription == target }
+  }
+
+  # All spoke module instances, whichever subscription they live in.
+  spoke_modules = merge(module.spokes_connectivity, module.spokes_shared, module.spokes_prod)
 
   # Everything the NVAs must route back through their internal NIC.
   spoke_address_spaces = concat(
@@ -109,8 +109,7 @@ locals {
   )
 
   # Every VNet (hub + spokes) – used for flow logs and diagnostics.
-  all_vnet_ids = merge(
-    { hub = azurerm_virtual_network.hub.id },
-    { for k, v in azurerm_virtual_network.spoke : k => v.id },
-  )
+  # Spoke VNets get their diagnostics and flow logs inside modules/spoke
+  # (in their own subscription); the hub's are handled here.
+  all_vnet_ids = { hub = azurerm_virtual_network.hub.id }
 }

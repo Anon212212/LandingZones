@@ -14,7 +14,7 @@ def test_derive_addresses_from_new_base(cfg):
     cfg.add_identity_region()
     cfg.derive_addresses()
     assert cfg.hub_address_space == "172.20.0.0/24"
-    assert cfg.avd_address_space == "172.20.3.0/24"
+    assert [sp.address_space for sp in cfg.spokes] == ["172.20.1.0/24", "172.20.2.0/24", "172.20.3.0/24"]
     assert [r.address_space for r in cfg.identity_regions] == ["172.20.4.0/24", "172.21.4.0/24", "172.22.4.0/24"]
 
 
@@ -44,3 +44,13 @@ def test_json_round_trip(cfg):
     cfg.add_identity_region()
     again = LandingZoneConfig.from_json(cfg.to_json())
     assert again == cfg
+
+
+def test_extra_spokes_skip_the_identity_slot(cfg):
+    cfg.add_spoke("web")
+    cfg.add_spoke("data")
+    assert [sp.address_space for sp in cfg.spokes][-2:] == ["10.145.5.0/24", "10.145.6.0/24"]
+    assert cfg.identity_regions[0].address_space == "10.145.4.0/24"
+    cfg.remove_spoke("prod")
+    assert [sp.key for sp in cfg.spokes] == ["shared", "avd", "web", "data"]
+    assert cfg.spokes[1].address_space == "10.145.2.0/24"

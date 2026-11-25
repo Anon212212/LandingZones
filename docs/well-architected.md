@@ -44,10 +44,11 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | Full AD DS port set on the DC subnet, scoped to `VirtualNetwork` | ✅ | `security.tf` |
 | VNet flow logs + Traffic Analytics on every VNet | ✅ | `monitoring.tf` |
 | Encryption at host | ⚙️ | `var.nva_encryption_at_host` (register the subscription feature first) |
-| DDoS Network Protection | ⚙️ | `var.ddos_protection_plan_id`. A plan is about USD 2.9k/month, so share one across the tenant. |
+| DDoS Network Protection | ⚙️ | `var.ddos_protection_plan_id`. A plan is about €2.7k/month, so share one across the tenant. |
 | The `VirtualNetwork` service tag also includes UDR prefixes, so with `0.0.0.0/0 → NVA`, spoke "Allow-VNet-Inbound" rules effectively allow any source that reaches the NVA | ⚠️ | Acceptable because the NVA is the only path in. Tighten spoke rules to explicit CIDRs for production workloads. |
 | Flow-log storage keeps shared-key access enabled | ⚠️ | Kept for Network Watcher compatibility. Terraform never uses keys. |
 | The Linux NVA is a router/SNAT, **not** an inspecting firewall (no IDPS, TLS inspection or FQDN filtering) | ⚠️ | For production, swap the image for a vendor NGFW or replace the pair with Azure Firewall Premium. The ILB/UDR design stays the same. |
+| **Workloads in their own landing-zone subscriptions** (shared services, production), separate from connectivity and identity | ✅ | `modules/spoke`, `network.tf`, `providers.tf` |
 | **Identity is tier-0 in its own subscription** with its own Key Vault (premium, RBAC, purge protection) and Log Analytics (365 days, Entra-only) | ✅ | `identity.tf`, `providers.tf` |
 | DC admin passwords generated and stored only in the tier-0 Key Vault | ✅ | `modules/identity-region` |
 | AD DS ports open to landing-zone CIDRs only; RDP only from approved admin sources | ✅ | `modules/identity-region` |
@@ -67,6 +68,8 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | Raw flow-log retention capped | ✅ | `var.flow_log_retention_days` |
 | Right-sized current-gen NVA (`D2s_v5`), StandardSSD OS disk for a stateless appliance | ✅ | `variables.tf`, `nva.tf` |
 | Optional cost levers: NAT Gateway, Bastion SKU, DDoS, NVA count | ✅ | `variables.tf` |
+| Cost estimate while designing, in EUR (bundled baseline or live Azure Retail Prices) | ✅ | `gui/lzdesigner/pricing.py` |
+| Per-subscription cost reporting: workloads in their own subscriptions | ✅ | landing-zone subscriptions |
 | Azure Hybrid Benefit for DCs | ⚙️ | `var.dc_hybrid_benefit` |
 | Reservations / savings plan for the NVA and DC VMs | ⛔ | Purchase decision. Always-on VMs are a good candidate. |
 
@@ -84,8 +87,10 @@ Legend: ✅ implemented · ⚙️ implemented, off by default (cost or prerequis
 | Guest telemetry (syslog auth + system, CPU/memory/network/disk) through Azure Monitor Agent + DCR | ✅ | `monitoring.tf`, `nva.tf` |
 | Common-schema action group for all alerts | ✅ | `monitoring.tf` |
 | Remote state with Entra ID auth | ⚙️ | `providers.tf` (uncomment the backend) |
-| Commit `.terraform.lock.hcl` for all platforms (`terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=windows_amd64`) | ⚙️ | Run once where the registry is reachable. |
-| Plan/apply pipeline with OIDC and environment approvals | ⛔ | Add when a deployment identity exists. |
+| `.terraform.lock.hcl` committed with hashes for Linux, macOS (Intel and ARM) and Windows | ✅ | repo root |
+| Plan/apply pipeline with OIDC (no secrets), a read-only plan identity, an approval-gated apply identity, and plan artifacts kept 90 days | ✅ | `.github/workflows/deploy.yml`, `scripts/bootstrap.sh` |
+| Remote state: ZRS, Entra ID-only, versioning, soft delete, delete lock | ✅ | `scripts/bootstrap.sh` |
+| Designer pre-flight checks against the tenant (overlap, quota, zones, Network Watcher, EncryptionAtHost, permissions) | ✅ | `gui/lzdesigner/azure.py` |
 
 ## 5. Performance Efficiency
 

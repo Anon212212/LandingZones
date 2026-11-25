@@ -1,3 +1,5 @@
 nicegui==3.17.1
+# Optional Azure sign-in + pre-flight checks (reuses `az login`, browser or device code)
+azure-identity==1.19.0
 # Optional: desktop window with `python gui/app.py --native`
 # pywebview>=5.0

@@ -11,21 +11,27 @@ baseline, and writes terraform.tfvars for the Terraform in the repo root.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-from nicegui import app as ng_app
-from nicegui import events, ui
+from nicegui import events, run, ui
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from lzdesigner import compliance, diagram, tfvars  # noqa: E402
+from lzdesigner import azure, compliance, diagram, pricing, tfvars  # noqa: E402
 from lzdesigner.catalog import (BACKUP_MODES, BASTION_SKUS, DC_IMAGES, ENVIRONMENTS,  # noqa: E402
                                 REGIONS, RESILIENCE_PRESETS, VM_SIZES)
-from lzdesigner.model import LandingZoneConfig  # noqa: E402
+from lzdesigner.model import SPOKE_SUBSCRIPTIONS, LandingZoneConfig  # noqa: E402
 from lzdesigner.validation import validate  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SUBSCRIPTION_FIELDS = [
+    ("subscription_id", "Connectivity subscription"),
+    ("identity_subscription_id", "Identity (tier-0) subscription"),
+    ("shared_services_subscription_id", "Shared services subscription"),
+    ("production_subscription_id", "Production subscription"),
+]
 ZONES = ["1", "2", "3"]
 REGION_OPTIONS = {k: f"{r.display}  ·  {k}" for k, r in REGIONS.items()}
 STATUS_ICON = {
@@ -61,6 +67,16 @@ class Designer:
         self.cfg.derive_addresses()
         self.locks: dict[str, ui.label] = {}
         self.lockable: dict[str, ui.element] = {}
+        # Azure (optional)
+        self.arm = None  # azure.ArmClient (or the demo tenant)
+        self.account: dict | None = None
+        self.subscriptions: list[dict] = []
+        self.preflight: list[azure.Check] | None = None
+        self.preflight_stale = False
+        self.preflight_running = False
+        self.device_message = ""
+        # Pricing
+        self.price_book = pricing.PriceBook()
 
     # ------------------------------------------------------------------ helpers
     def changed(self, *_):
@@ -82,6 +98,10 @@ class Designer:
                 lbl.set_text(f"🔒 {reason}" if reason else "")
                 lbl.set_visibility(reason is not None)
         self.address_table.refresh()
+        self.cost_view.refresh()
+        if self.preflight is not None and not self.preflight_stale:
+            self.preflight_stale = True
+            self.azure_view.refresh()
         self.diagram_view.refresh()
         self.status_view.refresh()
         self.export_view.refresh()
@@ -110,6 +130,7 @@ class Designer:
                 ui.label("Azure hub & spoke · HA NVAs · tier-0 identity — governed by WAF, NIS2 & DORA guardrails"
                          ).classes("text-xs text-grey-7")
             ui.space()
+            self.account_view()
             ui.button("Load project", icon="upload_file", on_click=self.open_upload).props("flat no-caps")
             ui.button("Export", icon="download", on_click=lambda: self.tabs.set_value("Export")).props("unelevated no-caps")
 
@@ -119,6 +140,11 @@ class Designer:
             with ui.column().classes("grow gap-4").style("min-width: 0"):
                 with ui.card().classes("lz-card w-full"):
                     self.status_view()
+                with ui.row().classes("w-full no-wrap gap-4 items-stretch"):
+                    with ui.card().classes("lz-card").style("flex: 1 1 0; min-width: 0"):
+                        self.cost_view()
+                    with ui.card().classes("lz-card").style("flex: 1 1 0; min-width: 0"):
+                        self.azure_view()
                 with ui.card().classes("lz-card w-full q-pa-sm"):
                     self.diagram_view()
 
@@ -166,10 +192,7 @@ class Designer:
             .props("outlined dense").classes("w-full")
         ui.label("Only regions with Availability Zones are offered.").classes("lz-hint")
         self.section("Subscriptions")
-        ui.input("Connectivity subscription ID", placeholder="00000000-0000-0000-0000-000000000000") \
-            .bind_value(c, "subscription_id").on_value_change(self.changed).props("outlined dense").classes("w-full")
-        ui.input("Identity (tier-0) subscription ID", placeholder="must differ from connectivity") \
-            .bind_value(c, "identity_subscription_id").on_value_change(self.changed).props("outlined dense").classes("w-full")
+        self.subscription_fields()
         self.section("Extra tags")
         ui.input("key=value, key=value", value=", ".join(f"{k}={v}" for k, v in c.tags.items()),
                  on_change=lambda e: (setattr(c, "tags", {p.split("=", 1)[0].strip(): p.split("=", 1)[1].strip()
@@ -181,10 +204,14 @@ class Designer:
         c = self.cfg
         self.section("Address plan")
         ui.switch("Plan addresses automatically from one /16").bind_value(c, "auto_addressing").on_value_change(
-            lambda: (self.manual_addresses.refresh(), self.changed()))
+            lambda: (self.manual_addresses.refresh(), self.spokes_view.refresh(), self.changed()))
         ui.input("Base network (/16)", placeholder="10.145.0.0/16").bind_value(c, "network_base") \
             .bind_enabled_from(c, "auto_addressing").on_value_change(self.changed).props("outlined dense").classes("w-full")
         self.manual_addresses()
+        self.section("Workload spokes")
+        ui.label("Each spoke gets its own VNet, NSG (baseline + your rules), route to the NVAs and hub peering.") \
+            .classes("lz-hint")
+        self.spokes_view()
         self.address_table()
         self.section("Egress")
         self.lock("enable_nat_gateway", ui.switch("NAT Gateway for Internet egress").bind_value(c, "enable_nat_gateway")
@@ -196,10 +223,83 @@ class Designer:
         c = self.cfg
         if c.auto_addressing:
             return
-        for fld, label in [("hub_address_space", "Hub (/24 or larger)"), ("spoke_address_space", "Shared services spoke"),
-                           ("prod_address_space", "Production spoke"), ("avd_address_space", "AVD spoke")]:
-            ui.input(label).bind_value(c, fld).on_value_change(self.changed).props("outlined dense").classes("w-full")
-        ui.label("Identity address spaces are set per region on the Identity tab.").classes("lz-hint")
+        ui.input("Hub (/24 or larger)").bind_value(c, "hub_address_space").on_value_change(self.changed) \
+            .props("outlined dense").classes("w-full")
+        ui.label("Spoke address spaces are set on each spoke below; identity ones per region on the Identity tab.") \
+            .classes("lz-hint")
+
+    @ui.refreshable
+    def spokes_view(self) -> None:
+        c = self.cfg
+        for sp in c.spokes:
+            with ui.card().tight().classes("w-full q-pa-sm").style("border:1px solid #E1DFDD; border-radius:10px"):
+                with ui.row().classes("w-full no-wrap items-center"):
+                    ui.input("Name").bind_value(sp, "key", forward=lambda v: (v or "").strip().lower()) \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-32")
+                    ui.input("Label (diagram)").bind_value(sp, "description").on_value_change(self.changed) \
+                        .props("outlined dense").classes("grow")
+                    ui.button(icon="delete", on_click=lambda k=sp.key: (c.remove_spoke(k), self.spokes_view.refresh(),
+                                                                        self.changed())).props("flat dense round") \
+                        .tooltip("Remove spoke")
+                ui.select(SPOKE_SUBSCRIPTIONS, label="Subscription").bind_value(sp, "subscription") \
+                    .on_value_change(lambda: (self.subscription_fields.refresh(), self.changed())) \
+                    .props("outlined dense").classes("w-full")
+                with ui.row().classes("w-full no-wrap items-center"):
+                    if c.auto_addressing:
+                        ui.label(f"{sp.address_space} · {sp.effective_subnet_name}").classes("lz-hint grow")
+                    else:
+                        ui.input("Address space").bind_value(sp, "address_space").on_value_change(self.changed) \
+                            .props("outlined dense").classes("grow")
+                    n = len(sp.nsg_rules)
+                    ui.button(f"NSG rules ({n})", icon="rule", on_click=lambda s_=sp: self.edit_rules(s_)) \
+                        .props("flat dense no-caps")
+        ui.button("Add spoke", icon="add", on_click=lambda: (c.add_spoke(), self.spokes_view.refresh(), self.changed())) \
+            .props("flat no-caps")
+
+    def edit_rules(self, spoke) -> None:
+        from lzdesigner.model import NsgRule
+
+        @ui.refreshable
+        def rows():
+            if not spoke.nsg_rules:
+                ui.label("No custom rules – the baseline allows Bastion (SSH/RDP) and VNet traffic in, "
+                         "and denies everything else.").classes("lz-hint")
+            for r in spoke.nsg_rules:
+                with ui.row().classes("w-full no-wrap items-center gap-2"):
+                    ui.input("Name").bind_value(r, "name").on_value_change(self.changed).props("outlined dense").classes("w-40")
+                    ui.number("Priority", min=300, max=3900, step=10).bind_value(r, "priority", forward=lambda v: int(v or 300)) \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-24")
+                    ui.select(["Inbound", "Outbound"], label="Direction").bind_value(r, "direction") \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-28")
+                    ui.select(["Allow", "Deny"], label="Access").bind_value(r, "access") \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-24")
+                    ui.select(["Tcp", "Udp", "Icmp", "*"], label="Protocol").bind_value(r, "protocol") \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-24")
+                    ui.input("Sources (CIDR / tag)").bind_value(r, "source_address_prefixes", forward=parse_list,
+                                                               backward=join_list) \
+                        .on_value_change(self.changed).props("outlined dense").classes("grow")
+                    ui.input("Ports").bind_value(r, "destination_port_ranges", forward=parse_list, backward=join_list) \
+                        .on_value_change(self.changed).props("outlined dense").classes("w-28")
+                    ui.button(icon="delete", on_click=lambda r_=r: (spoke.nsg_rules.remove(r_), rows.refresh(),
+                                                                    self.changed())).props("flat dense round")
+
+        def add_rule():
+            used = {r.priority for r in spoke.nsg_rules}
+            prio = next(p for p in range(300, 3901, 10) if p not in used)
+            spoke.nsg_rules.append(NsgRule(f"Allow-{prio}", prio, [self.cfg.hub_address_space], ["443"]))
+            rows.refresh()
+            self.changed()
+
+        with ui.dialog() as dlg, ui.card().style("min-width: 1000px"):
+            ui.label(f"NSG rules – spoke '{spoke.key}'").classes("text-lg font-semibold")
+            ui.label("Priorities 300–3900 sit between the baseline allows (100, 200) and the deny-all (4096). "
+                     "Inbound rules from the Internet are rejected.").classes("lz-hint")
+            rows()
+            with ui.row():
+                ui.button("Add rule", icon="add", on_click=add_rule).props("flat no-caps")
+                ui.space()
+                ui.button("Done", on_click=lambda: (dlg.close(), self.spokes_view.refresh())).props("unelevated")
+        dlg.open()
 
     @ui.refreshable
     def address_table(self) -> None:
@@ -332,7 +432,8 @@ class Designer:
         ui.select({v: k for k, v in BASTION_SKUS.items()}, label="Bastion SKU").bind_value(c, "bastion_sku") \
             .on_value_change(self.changed).props("outlined dense").classes("w-full")
         self.section("Protection")
-        ui.switch("Encryption at host (NVAs and DCs)").bind_value(c, "nva_encryption_at_host").on_value_change(self.changed)
+        self.eah_switch = ui.switch("Encryption at host (NVAs and DCs)").bind_value(c, "nva_encryption_at_host") \
+            .on_value_change(self.changed)
         ui.label("Register the Microsoft.Compute/EncryptionAtHost feature on both subscriptions first.").classes("lz-hint")
         ui.input("DDoS Network Protection plan ID (optional)").bind_value(c, "ddos_protection_plan_id") \
             .on_value_change(self.changed).props("outlined dense").classes("w-full")
@@ -357,13 +458,207 @@ class Designer:
                                                                                forward=lambda v: v if v is not None else -1) \
                 .on_value_change(self.changed).props("outlined dense").classes("grow")
         self.section("Cost")
-        ui.number("Monthly budget (0 = none)", min=0, step=100).bind_value(c, "monthly_budget_amount",
+        ui.number("Monthly budget in € (0 = none)", min=0, step=100).bind_value(c, "monthly_budget_amount",
                                                                            forward=lambda v: v or 0) \
             .on_value_change(self.changed).props("outlined dense").classes("w-full")
         self.section("Scaling signal")
         ui.label().bind_text_from(c, "nva_cpu_alert_threshold", lambda v: f"Alert when NVA CPU > {v} %").classes("text-sm")
         self.lock("nva_cpu_alert_threshold", ui.slider(min=50, max=95).bind_value(c, "nva_cpu_alert_threshold")
                   .on_value_change(self.changed))
+
+    # ------------------------------------------------------------------ Azure
+    @ui.refreshable
+    def subscription_fields(self) -> None:
+        c = self.cfg
+        if self.subscriptions:
+            opts = {s["subscriptionId"]: f"{s['displayName']}  ·  {s['subscriptionId']}" for s in self.subscriptions
+                    if s.get("state") == "Enabled"}
+            for fld, label in SUBSCRIPTION_FIELDS:
+                value = getattr(c, fld) if getattr(c, fld) in opts else None
+                ui.select(opts, label=label, value=value, with_input=True,
+                          on_change=lambda e, f=fld: (setattr(c, f, e.value or ""), self.changed())) \
+                    .props("outlined dense").classes("w-full")
+            ui.label(f"{len(opts)} subscriptions in tenant {self.account.get('tenant_id', '')}.").classes("lz-hint")
+        else:
+            for fld, label in SUBSCRIPTION_FIELDS:
+                ui.input(f"{label} ID", placeholder="00000000-0000-0000-0000-000000000000") \
+                    .bind_value(c, fld).on_value_change(self.changed).props("outlined dense").classes("w-full")
+            ui.label("Sign in to Azure (top right) to pick subscriptions from your tenant.").classes("lz-hint")
+        used = {t: ", ".join(sp.key for sp in c.spokes if sp.subscription == t) for t in ("shared", "prod")}
+        ui.label("Landing-zone subscriptions host workload spokes: "
+                 f"shared services → {used['shared'] or 'no spokes yet'}; production → {used['prod'] or 'no spokes yet'}. "
+                 "Choose each spoke's subscription on the Network tab.").classes("lz-hint")
+
+    @ui.refreshable
+    def account_view(self) -> None:
+        if self.account:
+            with ui.button(icon="account_circle").props("flat no-caps").classes("text-primary"):
+                ui.label(self.account.get("name") or "Signed in").classes("q-ml-xs")
+                with ui.menu():
+                    ui.menu_item(f"Tenant {self.account.get('tenant_id', '')}").props("disable")
+                    ui.menu_item("Sign out", on_click=self.sign_out)
+        else:
+            ui.button("Sign in to Azure", icon="login", on_click=self.open_sign_in).props("flat no-caps")
+
+    def open_sign_in(self) -> None:
+        method = {"value": "cli"}
+        tenant = {"value": ""}
+
+        async def go():
+            btn.disable()
+            status.set_text("Signing in…")
+            self.device_message = ""
+            try:
+                if method["value"] == "demo":
+                    from lzdesigner.demo import DemoTenant
+                    client = DemoTenant()
+                else:
+                    cred = await run.io_bound(azure.sign_in, method["value"], tenant["value"] or None,
+                                              lambda m: setattr(self, "device_message", m))
+                    client = azure.ArmClient(cred)
+                self.account = await run.io_bound(client.principal)
+                self.subscriptions = await run.io_bound(client.subscriptions)
+                self.arm = client
+            except Exception as e:  # noqa: BLE001 – show sign-in problems to the user
+                status.set_text(f"Sign-in failed: {e}")
+                btn.enable()
+                return
+            dlg.close()
+            ui.notify(f"Signed in as {self.account.get('name')} – {len(self.subscriptions)} subscriptions", type="positive")
+            self.account_view.refresh()
+            self.subscription_fields.refresh()
+            self.azure_view.refresh()
+
+        with ui.dialog() as dlg, ui.card().style("min-width: 520px"):
+            ui.label("Sign in to Azure").classes("text-lg font-semibold")
+            ui.label("Read-only: lists subscriptions and runs pre-flight checks. The designer stores no tokens.") \
+                .classes("lz-hint")
+            options = {"cli": "Use my Azure CLI session (az login)",
+                       "browser": "Sign in with a browser",
+                       "device": "Device code (no browser on this machine)"}
+            if os.environ.get("LZDESIGNER_DEMO"):
+                options["demo"] = "Demo tenant (no Azure access – for demos and screenshots)"
+            ui.radio(options, value="cli", on_change=lambda e: method.update(value=e.value))
+            ui.input("Tenant ID or domain (optional)", on_change=lambda e: tenant.update(value=e.value)) \
+                .props("outlined dense").classes("w-full")
+            status = ui.label("").classes("text-sm")
+            code = ui.label("").classes("text-sm font-semibold text-primary")
+            ui.timer(0.5, lambda: code.set_text(self.device_message))
+            with ui.row():
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+                btn = ui.button("Sign in", on_click=go).props("unelevated")
+        dlg.open()
+
+    def sign_out(self) -> None:
+        self.arm, self.account, self.subscriptions, self.preflight = None, None, [], None
+        self.account_view.refresh()
+        self.subscription_fields.refresh()
+        self.azure_view.refresh()
+        ui.notify("Signed out – the designer kept no tokens.")
+
+    async def run_preflight(self) -> None:
+        if not self.arm:
+            return
+        self.preflight_running = True
+        self.azure_view.refresh()
+        try:
+            self.preflight = await run.io_bound(azure.run_preflight, self.cfg, self.arm)
+        except Exception as e:  # noqa: BLE001
+            ui.notify(f"Pre-flight failed: {e}", type="negative")
+        self.preflight_running = False
+        self.preflight_stale = False
+        eah = next((c for c in self.preflight or [] if c.id == "EAH"), None)
+        if eah and "NotRegistered" in eah.detail and not self.cfg.nva_encryption_at_host:
+            self.eah_switch.disable()
+            # props, not ui.tooltip(): the button that started this was inside a refreshed view
+            self.eah_switch.props('title="EncryptionAtHost is not registered on the subscriptions – see pre-flight."')
+        self.azure_view.refresh()
+
+    @ui.refreshable
+    def azure_view(self) -> None:
+        with ui.row().classes("w-full items-center"):
+            ui.label("Pre-flight checks").classes("lz-section").style("margin:0")
+            ui.space()
+            if self.arm:
+                ui.button("Run checks", icon="play_arrow", on_click=self.run_preflight) \
+                    .props("flat dense no-caps").set_enabled(not self.preflight_running)
+        if not self.arm:
+            ui.label("Sign in to check this design against your tenant: existing VNet overlap, Network Watchers, "
+                     "EncryptionAtHost, VM size/zone availability, vCPU quota and your deploy permissions.") \
+                .classes("lz-hint")
+            ui.button("Sign in to Azure", icon="login", on_click=self.open_sign_in).props("outline no-caps dense")
+            return
+        if self.preflight_running:
+            with ui.row().classes("items-center"):
+                ui.spinner(size="sm")
+                ui.label("Checking your tenant…").classes("text-sm")
+            return
+        if self.preflight is None:
+            ui.label("Signed in. Run the checks once the subscriptions are selected.").classes("lz-hint")
+            return
+        sm = azure.summary(self.preflight)
+        with ui.row().classes("items-center gap-2"):
+            for st, color in ((azure.FAIL, "negative"), (azure.WARN, "warning"), (azure.PASS, "positive")):
+                if sm[st]:
+                    ui.badge(f"{sm[st]} {st}", color=color)
+            if self.preflight_stale:
+                ui.label("design changed – re-run").classes("lz-hint")
+        order = {azure.FAIL: 0, azure.WARN: 1, azure.INFO: 2, azure.PASS: 3}
+        icons = {azure.FAIL: ("cancel", "negative"), azure.WARN: ("error_outline", "warning"),
+                 azure.INFO: ("info", "grey"), azure.PASS: ("check_circle", "positive")}
+        with ui.column().classes("w-full gap-1").style("max-height: 260px; overflow:auto"):
+            for chk in sorted(self.preflight, key=lambda c: order[c.status]):
+                icon, color = icons[chk.status]
+                with ui.row().classes("w-full no-wrap items-start gap-2 cursor-pointer") \
+                        .on("click", lambda s_=chk.section: self.tabs.set_value(s_)):
+                    ui.icon(icon, color=color, size="18px")
+                    with ui.column().classes("gap-0"):
+                        ui.label(chk.title).classes("text-sm font-medium")
+                        ui.label(chk.detail).classes("lz-hint")
+
+    # ------------------------------------------------------------------ cost
+    @ui.refreshable
+    def cost_view(self) -> None:
+        est = pricing.estimate(self.cfg, self.price_book)
+        sym = {"USD": "$", "EUR": "€", "GBP": "£"}.get(est.currency, est.currency + " ")
+        with ui.row().classes("w-full items-center"):
+            ui.label("Estimated monthly cost").classes("lz-section").style("margin:0")
+            ui.space()
+            ui.select(["EUR", "USD", "GBP"], value=self.price_book.currency,
+                      on_change=lambda e: self.refresh_prices(e.value)).props("dense borderless").classes("w-20")
+            ui.button(icon="sync", on_click=lambda: self.refresh_prices(self.price_book.currency)) \
+                .props("flat dense round").tooltip("Refresh live prices from the Azure Retail Prices API")
+        with ui.row().classes("items-baseline gap-2"):
+            ui.label(f"≈ {sym}{est.total:,.0f}").classes("text-2xl font-semibold")
+            ui.label(f"/ month · {sym}{est.fixed:,.0f} fixed + {sym}{est.total - est.fixed:,.0f} usage-based").classes("lz-hint")
+        cats = est.by_category()
+        top = max(cats.values()) if cats else 1
+        for cat, amount in cats.items():
+            with ui.row().classes("w-full no-wrap items-center gap-2"):
+                ui.label(cat).classes("text-xs").style("width: 90px")
+                ui.linear_progress(amount / top, show_value=False, size="8px").classes("grow")
+                ui.label(f"{sym}{amount:,.0f}").classes("text-xs text-right").style("width: 70px")
+        with ui.expansion("Line items & assumptions").classes("w-full").props("dense"):
+            for line in est.lines:
+                with ui.row().classes("w-full no-wrap"):
+                    ui.label(line.item + (" *" if line.usage_based else "")).classes("text-xs grow")
+                    ui.label(line.qty).classes("text-xs text-grey-7").style("width: 120px")
+                    ui.label(f"{sym}{line.monthly:,.2f}").classes("text-xs text-right").style("width: 80px")
+            ui.label("* usage-based, from default assumptions (2 GB/day platform logs, 1 GB/day tier-0 logs, "
+                     "1 GB/day flow logs, 100 GB/month NAT egress, 60 GB backup per DC).").classes("lz-hint")
+            for note in est.notes:
+                ui.label(note).classes("lz-hint")
+
+    async def refresh_prices(self, currency: str) -> None:
+        ui.notify("Fetching live prices…")
+        try:
+            self.price_book = await run.io_bound(pricing.refresh_live_prices, self.cfg, currency)
+            ui.notify(f"Live {currency} prices loaded", type="positive")
+        except Exception as e:  # noqa: BLE001 – offline or blocked: keep the baseline
+            self.price_book = pricing.PriceBook()
+            ui.notify(f"Couldn't reach prices.azure.com ({e.__class__.__name__}) – showing the bundled EUR baseline.",
+                      type="warning")
+        self.cost_view.refresh()
 
     # ------------------------------------------------------------------ live views
     @ui.refreshable
@@ -483,6 +778,32 @@ class Designer:
             ui.button("Project file", icon="data_object",
                       on_click=lambda: ui.download.content(c.to_json(), "landingzone.json")).props("outline no-caps")
         ui.label(f"Writes {REPO_ROOT / 'terraform.tfvars'} (git-ignored). Then run terraform init / plan.").classes("lz-hint")
+
+        self.section("Deployment pipeline")
+        ui.label("Plan on pull requests with a read-only identity, apply on main after an approval – passwordless "
+                 "(OIDC) GitHub Actions. See .github/workflows/deploy.yml.").classes("lz-hint")
+        rg, sa = c.state_names()
+        with ui.row().classes("w-full no-wrap"):
+            ui.input("GitHub repository (OWNER/REPO)").bind_value(c, "github_repo") \
+                .on("blur", self.export_view.refresh).props("outlined dense").classes("grow")
+            ui.input("GitHub environment").bind_value(c, "github_environment") \
+                .on("blur", self.export_view.refresh).props("outlined dense").classes("w-40")
+        with ui.row().classes("w-full no-wrap"):
+            ui.input("State resource group", placeholder=rg).bind_value(c, "state_resource_group") \
+                .on("blur", self.export_view.refresh).props("outlined dense").classes("grow")
+            ui.input("State storage account", placeholder=sa).bind_value(c, "state_storage_account") \
+                .on("blur", self.export_view.refresh).props("outlined dense").classes("grow")
+        env_file = f"environments/{c.github_environment or 'production'}.tfvars"
+        ui.button(f"Write {env_file}", icon="save", on_click=lambda: self.write_env_tfvars(env_file)) \
+            .props("unelevated no-caps").set_enabled(not issues)
+        ui.label("1 · Run once (az login as an admin) to create the state storage and the two pipeline identities:") \
+            .classes("text-sm q-mt-sm")
+        ui.code(c.bootstrap_command(), language="bash").classes("w-full text-xs")
+        ui.label("2 · Set the repository variables it prints, and add required reviewers to the "
+                 f"'{c.github_environment}' environment.  3 · Commit {env_file} in a pull request: the plan runs, "
+                 "and the apply waits for approval after merge.").classes("text-sm")
+
+        self.section("terraform.tfvars preview")
         ui.code(text, language="terraform").classes("w-full text-xs")
 
     # ------------------------------------------------------------------ actions
@@ -502,6 +823,12 @@ class Designer:
                 ui.button("Cancel", on_click=dialog.close).props("flat")
                 ui.button("Write", on_click=do_write).props("unelevated")
         dialog.open()
+
+    def write_env_tfvars(self, rel: str) -> None:
+        target = REPO_ROOT / rel
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(tfvars.render(self.cfg))
+        ui.notify(f"Wrote {rel} – commit it in a pull request to run the plan.", type="positive")
 
     def open_upload(self) -> None:
         async def handle(e: events.UploadEventArguments):
