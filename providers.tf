@@ -3,7 +3,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.105"
+      version = "~> 3.116"
     }
   }
   # Optional: remote state (replace with your storage details)
