@@ -14,3 +14,9 @@ override.tf.json
 terraform.rc
 tfplan
 *.tfplan
+
+# Landing Zone Designer
+landingzone.json
+.nicegui/
+__pycache__/
+.pytest_cache/

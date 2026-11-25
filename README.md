@@ -52,6 +52,20 @@ Hub subnets, NVA IPs and the ILB frontend are **derived** from `hub_address_spac
 
 ---
 
+## Landing Zone Designer (GUI)
+
+Prefer not to edit variables by hand? `gui/` contains a Python front end. Choose options from dropdowns and presets, watch the architecture diagram update live, switch on **NIS2** / **DORA** to enforce their baseline on top of WAF, and export `terraform.tfvars`, an editable draw.io diagram and a compliance report.
+
+```bash
+pip install -r gui/requirements.txt
+```
+
+```bash
+python gui/app.py
+```
+
+See [gui/README.md](gui/README.md).
+
 ## Usage
 
 Prerequisites: Terraform ≥ 1.9, Azure CLI login (or a service principal / OIDC), and two subscriptions in the same tenant (connectivity and identity). The deploying identity needs Owner (or Contributor + User Access Administrator) on both, because it peers across them and grants itself Key Vault Secrets Officer on the tier-0 vault.
@@ -140,3 +154,4 @@ See `variables.tf` for the full list, all with validation and descriptions.
 | `tests/` | `terraform test` guardrails |
 | `docs/well-architected.md` | WAF pillar mapping, trade-offs, gaps |
 | `docs/identity.md` | Tier-0 identity design, backup, promotion and restore runbook |
+| `gui/` | Landing Zone Designer: GUI, compliance rules engine (WAF/NIS2/DORA), live diagram, tfvars generator |

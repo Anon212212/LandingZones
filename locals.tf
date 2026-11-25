@@ -17,6 +17,7 @@ locals {
     westus3            = "wus3"
     centralus          = "cus"
     australiaeast      = "aue"
+    southeastasia      = "sea"
   }
   region_short = lookup(local.region_short_map, var.location, var.location)
 
