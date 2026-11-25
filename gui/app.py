@@ -244,7 +244,7 @@ class Designer:
                         .on_value_change(self.changed).props("outlined dense").classes("w-32")
                     ui.input("Label (diagram)").bind_value(sp, "description").on_value_change(self.changed) \
                         .props("outlined dense").classes("grow")
-                    ui.button(icon="delete", on_click=lambda k=sp.key: (c.remove_spoke(k), self.spokes_view.refresh(),
+                    ui.button(icon="delete", on_click=lambda s_=sp: (c.remove_spoke(s_.key), self.spokes_view.refresh(),
                                                                         self.changed())).props("flat dense round") \
                         .tooltip("Remove spoke")
                 ui.select(SPOKE_SUBSCRIPTIONS, label="Subscription").bind_value(sp, "subscription") \
@@ -252,7 +252,8 @@ class Designer:
                     .props("outlined dense").classes("w-full")
                 with ui.row().classes("w-full no-wrap items-center"):
                     if c.auto_addressing:
-                        ui.label(f"{sp.address_space} · {sp.effective_subnet_name}").classes("lz-hint grow")
+                        ui.label().bind_text_from(sp, "key", backward=lambda _, s_=sp: f"{s_.address_space} · {s_.effective_subnet_name}") \
+                            .classes("lz-hint grow")
                     else:
                         ui.input("Address space").bind_value(sp, "address_space").on_value_change(self.changed) \
                             .props("outlined dense").classes("grow")
